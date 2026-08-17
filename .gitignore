@@ -13,3 +13,5 @@ CLAUDE.md
 .claude/
 generation_cache/
 tmp_workspace/
+# materialized corpus subsets; regenerate with subset/materialize.py
+corpus_5k/

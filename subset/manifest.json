@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "salt": "erb-5k-v1",
+  "budget": 5000,
+  "parameters": {
+    "distractor_budget": 500,
+    "neighbor_k": 1,
+    "slug_overlap": 0.5,
+    "common_token_cutoff": 4000,
+    "gold_seeded_from": "all 600 candidate questions"
+  },
+  "inputs": {
+    "uuid_index_sha256": "854cda12a43334a9b7c9ebbb4a069a089d52fd7033bc71d79bdbf54f708137fb",
+    "train_sha256": "c45e0623bf7e091801d38ad9422162f9d661ed7a3218d4e7e61595ccd1d47d80",
+    "test_sha256": "68c56e74732f81ad7b69902850a31b7b0a754e73180da471b6edca71f52744e9",
+    "corpus_documents": 511958
+  },
+  "counts": {
+    "included": 5000,
+    "gold": 812,
+    "gold_for_suite": 427,
+    "distractor": 500,
+    "distractor_candidates": 1622,
+    "background_seeds": 466,
+    "neighbor_only": 3222,
+    "by_source": {
+      "slack": 1462,
+      "gmail": 942,
+      "confluence": 692,
+      "jira": 395,
+      "linear": 393,
+      "google_drive": 346,
+      "github": 322,
+      "fireflies": 233,
+      "hubspot": 215
+    }
+  },
+  "checks": {
+    "seed_sibling_profile": {
+      "gold": 1.961,
+      "distractor": 1.994,
+      "background": 2.0
+    },
+    "spread": 0.039
+  },
+  "complement": "every dsid in uuid_index.json not listed in include.jsonl; reproducible from uuid_index_sha256 plus salt and parameters"
+}
