@@ -1,0 +1,76 @@
+{
+  "seed": 42,
+  "method": "uniform random sample per question_type from questions.jsonl + extra_questions.jsonl, shuffled, split 50/50",
+  "total": {
+    "train": 100,
+    "test": 100
+  },
+  "per_category": [
+    {
+      "category": "basic",
+      "pool": 175,
+      "train": 5,
+      "test": 5
+    },
+    {
+      "category": "completeness",
+      "pool": 20,
+      "train": 10,
+      "test": 10
+    },
+    {
+      "category": "conflicting_info",
+      "pool": 20,
+      "train": 9,
+      "test": 9
+    },
+    {
+      "category": "constrained",
+      "pool": 30,
+      "train": 13,
+      "test": 13
+    },
+    {
+      "category": "high_level",
+      "pool": 10,
+      "train": 0,
+      "test": 0
+    },
+    {
+      "category": "info_not_found",
+      "pool": 20,
+      "train": 5,
+      "test": 5
+    },
+    {
+      "category": "intra_document_reasoning",
+      "pool": 40,
+      "train": 5,
+      "test": 5
+    },
+    {
+      "category": "metadata",
+      "pool": 100,
+      "train": 18,
+      "test": 18
+    },
+    {
+      "category": "miscellaneous",
+      "pool": 20,
+      "train": 9,
+      "test": 9
+    },
+    {
+      "category": "project_related",
+      "pool": 40,
+      "train": 16,
+      "test": 16
+    },
+    {
+      "category": "semantic",
+      "pool": 125,
+      "train": 10,
+      "test": 10
+    }
+  ]
+}
