@@ -43,10 +43,16 @@ def get_llm(
         return AnthropicLLM(
             model=model, tools=tools, quiet=quiet, reasoning_level=reasoning_level
         )
+    elif provider == "vllm":
+        from src.llm.vllm_llm import VLLMLLM
+
+        return VLLMLLM(
+            model=model, tools=tools, quiet=quiet, reasoning_level=reasoning_level
+        )
     else:
         raise ValueError(
             f"Unsupported LLM provider: {provider}. "
-            "Supported providers: openai, anthropic"
+            "Supported providers: openai, anthropic, vllm"
         )
 
 
@@ -99,8 +105,18 @@ def get_cheap_llm(
             quiet=quiet,
             reasoning_level=reasoning_level,
         )
+    elif provider == "vllm":
+        # The reader box serves one model, so the cheap tier is that same model.
+        # An arm reproducing the study's reader may not fall back to another model
+        # for its compaction and forced-finish calls: those calls shape the answer,
+        # so a second model would put a system the study never ran into the results.
+        from src.llm.vllm_llm import VLLMLLM
+
+        return VLLMLLM(
+            model=model, tools=tools, quiet=quiet, reasoning_level=reasoning_level
+        )
     else:
         raise ValueError(
             f"Unsupported LLM provider: {provider}. "
-            "Supported providers: openai, anthropic"
+            "Supported providers: openai, anthropic, vllm"
         )
