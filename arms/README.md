@@ -6,7 +6,7 @@ that a published curve and a measured one sit on the same axes:
 
 | arm | what it is | where it runs |
 |---|---|---|
-| 1 — BM25 | top-5 chunks, read by the study's reader | this host |
+| 1 — BM25 | top-5 whole documents, read by the study's reader | this host |
 | 2 — File-System Agent | shell exploration of the tier tree, 80 LLM calls/question | this host |
 
 A third arm — the same BM25 retrieval read by an Aethos-tier model — runs elsewhere and
@@ -18,7 +18,8 @@ consumes a file this one writes. A fourth is Aethos itself. Neither is built her
 
 | setting | value | |
 |---|---|---|
-| retrieval depth | 5 chunks | `TOP_K` |
+| retrieval depth | 5 | `TOP_K` |
+| retrieval unit | whole documents | `RETRIEVAL_GRANULARITY` |
 | chunking | 1,200 tokens, 100 overlap | `ladder.common.CHUNK_SIZE`/`CHUNK_OVERLAP` |
 | agent budget | 80 LLM calls/question | `MAX_LLM_CALLS` |
 | reader | `Qwen/Qwen3.6-27B` via vLLM | `READER_MODEL` |
@@ -27,8 +28,9 @@ consumes a file this one writes. A fourth is Aethos itself. Neither is built her
 The settings *are* the reproduction. A knob that can drift between tiers would make the
 rungs incomparable to each other, and nothing in the resulting curve would show it — so
 the ladder's four rungs are measured by one configuration or the comparison is void.
-Passing `--top-k` or `--max-llm-calls` anything else prints a warning saying the run is
-not comparable to the published curve; it is there for smoke tests, not for tuning.
+Passing `--top-k`, `--granularity` or `--max-llm-calls` anything else prints a warning
+saying the run is not comparable to the published curve; it is there for smoke tests, not
+for tuning.
 
 Chunk size and the document text come from `ladder.common`, imported rather than
 restated. A tier's published token and chunk counts were validated against the study's
@@ -40,13 +42,17 @@ differently-joined document would be searching a corpus the ladder never measure
 The phrase "configure the runners" undersells it. Three of the study's shared settings
 had no knob to turn:
 
-**BM25 was document-level.** `src/scripts/answer_generation/index_document_bm25.py`
-indexes whole documents into one `text` field and its runner retrieves whole documents;
-there is no chunker anywhere near it. The study retrieves top-5 *chunks*. Rather than
-change that pair, `arms/index_bm25.py` and `arms/bm25.py` are a second, chunked index and
-runner alongside them — because `ladder.pool` mines its trap and lure candidates from the
-document-level index's top-200, so re-pointing it at chunks would change a bedrock phase
-5 has already committed.
+**BM25 needed a per-tier index.** `src/scripts/answer_generation/index_document_bm25.py`
+indexes the whole corpus, and `ladder.pool` mines its trap and lure candidates from that
+index's top-200 — so re-pointing it at a tier would change a bedrock phase 5 has already
+committed. `arms/index_bm25.py` and `arms/bm25.py` are a second, per-tier index and
+runner alongside it, at the same analyzer and the same query, differing only in what is
+indexed.
+
+**And in what a hit is — which cost a full measurement to get right.** The study
+publishes "top-5 retrieval depth" beside "1,200-token chunks with 100-token overlap",
+and those admit two readings: five chunks, or five documents. This harness first read it
+as five chunks. That is wrong, and the error is not cosmetic — see below.
 
 **The agent was wall-clock bounded.** `run_agent_conversation` took `timeout_seconds` and
 no call ceiling, so `max_llm_calls` is new. The last call of the budget is reserved for
@@ -67,6 +73,43 @@ under the budget it names.
 **The reader was unreachable.** `get_llm()` spoke the OpenAI Responses API against
 `api.openai.com` with no `base_url`, and vLLM serves Chat Completions. `src/llm/vllm_llm.py`
 is a third provider, selected by `LLM_PROVIDER=vllm`.
+
+## What a hit is: documents, not chunks
+
+`RETRIEVAL_GRANULARITY` is `document`, and it is a *recorded* setting — it appears in an
+arm's `run.json` and the gate refuses a cell that carries the other value. Two reasons it
+is document:
+
+* The benchmark's own BM25 baseline indexes and retrieves whole documents. A chunked
+  BM25 is this harness's construction, not the study's.
+* The chunk spec is what the *dense* paradigms need: an embedding is taken over a window
+  and not over a document of arbitrary length. BM25 is lexical and needs no window.
+
+**The two are not close.** Under chunk-level retrieval a gold document counts as
+retrieved when any one of its chunks reaches the top five, while the reader sees only
+that chunk — so the answer carries whichever gold fact happened to fall in that window
+and misses the ones in the others. It scores *correct* on the headline fact and
+*incomplete* on the rest, which is exactly the shape the first T0 measurement had:
+document recall 88%, correctness 80%, completeness 66%.
+
+Measured at T0, grouping questions by how much of the gold document the reader actually
+received:
+
+| gold document the reader saw | n | correct | combined |
+|---|---:|---:|---:|
+| 100% (whole document) | 263 | 91.6% | **71.7** |
+| 50–99% | 139 | 82.7% | 62.3 |
+| <50% | 31 | 48.4% | 35.7 |
+
+The published value is 74.7. The reproduction was being lost *inside* the retrieved
+documents, not in which documents were retrieved — gold coverage barely moves between the
+two settings (88.1% chunk-level against 89.3% document-level), and the whole-document
+group lands inside the gate's acceptance band on its own.
+
+The chunk path is kept rather than deleted, because the first T0 cell was measured with
+it and a number is only interpretable next to the unit that produced it. The two live in
+separate indices, `erb-docs-<tier>` and `erb-chunks-<tier>`, so a runner cannot read one
+while reporting the other.
 
 ## Two things the arms do not see
 
@@ -98,7 +141,7 @@ python -m ladder.materialize --tier T0 --out /data/tier-T0
 
 # On the baseline host:
 export LLM_PROVIDER=vllm VLLM_BASE_URL=http://localhost:8000/v1
-python -m arms.index_bm25 --tier-tree /data/tier-T0 --recreate
+python -m arms.index_bm25 --tier-tree /data/tier-T0 --recreate   # whole documents
 python -m arms.bm25   --tier-tree /data/tier-T0 --out-dir results/T0/bm25
 python -m arms.agent  --tier-tree /data/tier-T0 --out-dir results/T0/agent
 ```

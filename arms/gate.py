@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from arms.common import Tier, load_tier
+from arms.common import RETRIEVAL_GRANULARITY, Tier, load_tier
 from arms.published import published_score
 from arms.run import FAILED_ANSWER_TEXT, read_rows
 
@@ -77,7 +77,16 @@ CONFIDENCE = 0.95
 # than trusted: the arms warn when these are overridden but still run, because the
 # override exists for smoke tests -- and a smoke-test setting that reached a gate run
 # would produce a score rather than an error.
-REQUIRED_SETTINGS = {"bm25": {"top_k": 5}, "agent": {"max_llm_calls": 80}}
+#
+# ``granularity`` is here for the same reason the others are, and it is the one that
+# cost a measurement to learn: a chunk-level cell and a document-level cell are both
+# well-formed, both report five retrieved units, and differ by twelve points of
+# combined score, because chunk-level hands the reader one window of a gold document
+# and calls the document retrieved.
+REQUIRED_SETTINGS = {
+    "bm25": {"top_k": 5, "granularity": RETRIEVAL_GRANULARITY},
+    "agent": {"max_llm_calls": 80},
+}
 
 
 # ---------------------------------------------------------------------------

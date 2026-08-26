@@ -1,6 +1,6 @@
 """Arm 1: the study's BM25 paradigm over one tier, read by the study's reader.
 
-Retrieves the top-5 chunks for each question, renders them into a context block, and
+Retrieves the top-5 documents for each question, renders them into a context block, and
 asks the reader for an answer under the repository's own answer-generation prompt.
 Writes two files, because this arm produces the control arm's input as well as its own
 result:
@@ -32,6 +32,8 @@ from tqdm import tqdm
 
 from arms.common import (
     Chunk,
+    GRANULARITIES,
+    RETRIEVAL_GRANULARITY,
     TOP_K,
     Tier,
     documents_of,
@@ -92,6 +94,15 @@ def main() -> None:
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--opensearch-url", default=DEFAULT_OPENSEARCH_URL)
     parser.add_argument("--index-name", default=None)
+    parser.add_argument(
+        "--granularity",
+        default=RETRIEVAL_GRANULARITY,
+        choices=GRANULARITIES,
+        help=(
+            f"What the top-k counts: whole documents or windowed chunks "
+            f"(default: {RETRIEVAL_GRANULARITY}, the study's)"
+        ),
+    )
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument(
         "--parallelism",
@@ -112,8 +123,16 @@ def main() -> None:
             f"is not comparable to the published curve"
         )
 
+    if args.granularity != RETRIEVAL_GRANULARITY:
+        print(
+            f"[warn] granularity {args.granularity!r} is not the study's "
+            f"{RETRIEVAL_GRANULARITY!r}; this run is not comparable to the published "
+            f"curve. Under chunk-level retrieval the reader sees only the matching "
+            f"window of a retrieved document, not the document."
+        )
+
     tier: Tier = load_tier(args.tier_tree)
-    index_name = args.index_name or index_name_for(tier)
+    index_name = args.index_name or index_name_for(tier, args.granularity)
     questions = load_core_questions(limit=args.limit)
 
     # Before anything is read back: resume keys off the question id alone, so an
@@ -126,6 +145,7 @@ def main() -> None:
             "tier": tier.name,
             "manifest_sha256": tier.manifest_sha256,
             "index": index_name,
+            "granularity": args.granularity,
             "top_k": args.top_k,
             "parallelism": args.parallelism,
         },
@@ -145,7 +165,11 @@ def main() -> None:
         f"{tier.name} / bm25: {len(questions)} question(s), {len(done)} already answered, "
         f"{len(pending)} pending -> {args.out_dir}"
     )
-    settings = {"index": index_name, "top_k": args.top_k}
+    settings = {
+        "index": index_name,
+        "granularity": args.granularity,
+        "top_k": args.top_k,
+    }
     if not pending:
         report_run(
             answers_path,

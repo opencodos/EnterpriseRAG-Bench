@@ -33,6 +33,28 @@ from ladder.common import (
 TOP_K = 5
 MAX_LLM_CALLS = 80
 
+# What the top-5 counts. The study publishes "top-5 retrieval depth" beside
+# "1,200-token chunks with 100-token overlap", and the two readings of that pair are
+# not equivalent: five chunks, or five documents represented as chunks.
+#
+# Document-level is the setting, for two reasons. The benchmark's own BM25 baseline
+# (``src.scripts.answer_generation.index_document_bm25`` and its runner) indexes and
+# retrieves whole documents, so a chunked BM25 is our construction rather than the
+# study's; and the chunk spec is what the *dense* paradigms need, since an embedding
+# is taken over a window and not over a document of arbitrary length. BM25 is lexical
+# and needs no such window.
+#
+# Measured at T0, the difference is not cosmetic. Under chunk-level retrieval a gold
+# document counts as retrieved when any one of its chunks reaches the top five, while
+# the reader sees only that chunk -- so the answer carries the fact that happened to
+# be in it and misses the ones in the others. Grouped by how much of the gold document
+# the reader actually received: whole document, 71.7 combined; half to nearly all,
+# 62.3; less than half, 35.7. The published value is 74.7. The reproduction was being
+# lost inside the retrieved documents, not in which documents were retrieved -- gold
+# coverage barely moves between the two settings (88.1% against 89.3%).
+RETRIEVAL_GRANULARITY = "document"
+GRANULARITIES = ("document", "chunk")
+
 # The reader stack the study serves. The embedding model is part of that stack and is
 # stood up beside the reader, but neither reproduced arm queries it: BM25 is lexical
 # and the File-System Agent greps. It is here so the host that serves the reader is
@@ -72,7 +94,12 @@ def chunk_text(
 
 @dataclass(frozen=True)
 class Chunk:
-    """One retrievable unit: a window of one document's indexed text."""
+    """One retrievable unit: a window of one document's indexed text.
+
+    A whole document is the degenerate case, ``index=0`` of ``total=1`` -- which is
+    already what a document shorter than the window produces, so document-level
+    retrieval is not a second kind of thing here but the same one at its limit.
+    """
 
     dsid: str
     index: int
@@ -84,6 +111,28 @@ class Chunk:
     def point_id(self) -> str:
         """The id this chunk is stored under, deterministic in (document, position)."""
         return f"{self.dsid}:{self.index}"
+
+    @property
+    def is_whole_document(self) -> bool:
+        return self.total == 1
+
+
+def whole_document(doc: dict[str, Any]) -> Chunk:
+    """One corpus document as a single retrievable unit, unwindowed.
+
+    The text is exactly what ``document_chunks`` would have windowed, so the two
+    granularities differ in where the text is cut and not in what it is.
+
+    Raises KeyError when the document carries no field labels, which is how a file
+    under ``sources/`` that is not a corpus document announces itself.
+    """
+    return Chunk(
+        dsid=doc["dataset_doc_uuid"],
+        index=0,
+        total=1,
+        title=str(doc[doc["title_field_name"]]),
+        text=document_text(doc),
+    )
 
 
 def document_chunks(doc: dict[str, Any]) -> list[Chunk]:

@@ -1,12 +1,15 @@
-"""Index one tier's documents as chunks, for the study's BM25 arm.
+"""Index one tier for the study's BM25 arm, by document or by chunk.
 
-This is a second BM25 index, not a change to the repository's own. The shipped
-``src.scripts.answer_generation.index_document_bm25`` indexes whole documents into one
-``text`` field and the shipped runner retrieves whole documents -- and the ladder build
-depends on exactly that behaviour, since ``ladder.pool`` mines its trap and lure
-candidates from that index's document-level top-200. Re-pointing it at chunks would
-change what phase 5 already committed. So the study's chunked retrieval gets its own
-index, its own name and its own runner, and the document-level pair is left alone.
+This is a second BM25 index, not a change to the repository's own. The ladder build
+depends on the shipped ``src.scripts.answer_generation.index_document_bm25`` exactly as
+it is, since ``ladder.pool`` mines its trap and lure candidates from that index's
+top-200 over the *full corpus*. This one is per-tier and is left free to vary.
+
+**Granularity is a recorded setting, not a detail.** ``document`` is the study's, and
+the default; ``chunk`` is kept because the first T0 measurement was taken with it and a
+number is only interpretable next to the unit that produced it. The two live in
+separate indices -- ``erb-docs-<tier>`` and ``erb-chunks-<tier>`` -- so a runner cannot
+silently read one while reporting the other, and the runner records which it used.
 
 Each tier is its own index. The search space is the experiment's independent variable,
 so an arm that searched a wider index than the rung it reports would be measuring
@@ -27,7 +30,16 @@ from pathlib import Path
 from opensearchpy import OpenSearch, helpers as os_helpers
 from tqdm import tqdm
 
-from arms.common import CHUNK_OVERLAP, CHUNK_SIZE, Tier, document_chunks, load_tier
+from arms.common import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    GRANULARITIES,
+    RETRIEVAL_GRANULARITY,
+    Tier,
+    document_chunks,
+    load_tier,
+    whole_document,
+)
 
 DEFAULT_OPENSEARCH_URL = "http://localhost:9200"
 
@@ -54,9 +66,16 @@ INDEX_SETTINGS = {
 }
 
 
-def index_name_for(tier: Tier) -> str:
-    """One index per rung, named after it."""
-    return f"erb-chunks-{tier.name.lower()}"
+def index_name_for(tier: Tier, granularity: str = RETRIEVAL_GRANULARITY) -> str:
+    """One index per rung and unit, named after both.
+
+    The unit is in the name because it is the thing most easily lost: two indices over
+    the same rung that differ only in what a hit *is* would otherwise be
+    interchangeable to every caller, and a cell measured against the wrong one would
+    report a plausible number.
+    """
+    stem = "docs" if granularity == "document" else "chunks"
+    return f"erb-{stem}-{tier.name.lower()}"
 
 
 def main() -> None:
@@ -70,7 +89,18 @@ def main() -> None:
         help="A directory written by `python -m ladder.materialize`",
     )
     parser.add_argument("--opensearch-url", default=DEFAULT_OPENSEARCH_URL)
-    parser.add_argument("--index-name", default=None, help="Defaults to erb-chunks-<tier>")
+    parser.add_argument(
+        "--granularity",
+        default=RETRIEVAL_GRANULARITY,
+        choices=GRANULARITIES,
+        help=(
+            f"What a hit is: a whole document or a windowed chunk "
+            f"(default: {RETRIEVAL_GRANULARITY}, the study's)"
+        ),
+    )
+    parser.add_argument(
+        "--index-name", default=None, help="Defaults to erb-{docs,chunks}-<tier>"
+    )
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument(
         "--recreate",
@@ -81,12 +111,21 @@ def main() -> None:
 
     started = time.time()
     tier = load_tier(args.tier_tree)
-    index_name = args.index_name or index_name_for(tier)
+    index_name = args.index_name or index_name_for(tier, args.granularity)
     print(
         f"{tier.name}: {len(tier.dsids):,} documents "
         f"({tier.documents:,} with the organizational pages) -> {index_name}"
     )
-    print(f"  chunking at {CHUNK_SIZE}/{CHUNK_OVERLAP} tokens")
+    if args.granularity == "chunk":
+        print(f"  indexing chunks at {CHUNK_SIZE}/{CHUNK_OVERLAP} tokens")
+    else:
+        print("  indexing whole documents, unwindowed")
+    if args.granularity != RETRIEVAL_GRANULARITY:
+        print(
+            f"[warn] granularity {args.granularity!r} is not the study's "
+            f"{RETRIEVAL_GRANULARITY!r}; this index is not comparable to the "
+            f"published curve"
+        )
 
     index = tier.uuid_index()
     client = OpenSearch(hosts=[args.opensearch_url], use_ssl=False, verify_certs=False)
@@ -104,11 +143,16 @@ def main() -> None:
 
     actions: list[dict[str, object]] = []
     unreadable: list[str] = []
-    for dsid in tqdm(tier.dsids, desc="Chunking", leave=False):
+    unit = "Chunking" if args.granularity == "chunk" else "Reading"
+    for dsid in tqdm(tier.dsids, desc=unit, leave=False):
         path = tier.sources / index[dsid]
         try:
             doc = json.loads(path.read_bytes())
-            chunks = document_chunks(doc)
+            chunks = (
+                document_chunks(doc)
+                if args.granularity == "chunk"
+                else [whole_document(doc)]
+            )
         except Exception:  # noqa: BLE001 -- any unreadable document is the same answer
             unreadable.append(dsid)
             continue
@@ -131,11 +175,11 @@ def main() -> None:
     # shrink the search space, so it stops the build the way a missing one does.
     if unreadable:
         raise SystemExit(
-            f"{len(unreadable)} manifest document(s) could not be chunked, starting "
+            f"{len(unreadable)} manifest document(s) could not be read, starting "
             f"{unreadable[:3]}; the index would cover less than the tier"
         )
 
-    print(f"  {len(actions):,} chunks to index")
+    print(f"  {len(actions):,} unit(s) to index")
     indexed = 0
     errors = 0
     for start in tqdm(range(0, len(actions), args.batch_size), desc="Batches"):
@@ -151,12 +195,13 @@ def main() -> None:
 
     if errors or indexed != len(actions):
         raise SystemExit(
-            f"indexed {indexed:,} of {len(actions):,} chunks with {errors} error(s); "
+            f"indexed {indexed:,} of {len(actions):,} unit(s) with {errors} error(s); "
             f"the index does not cover the tier"
         )
 
     print(
-        f"\nDone. {tier.name}: {indexed:,} chunks from {len(tier.dsids):,} documents "
+        f"\nDone. {tier.name}: {indexed:,} {args.granularity} unit(s) from "
+        f"{len(tier.dsids):,} documents "
         f"in {time.time() - started:.1f}s -> {index_name}"
     )
 
