@@ -6,7 +6,7 @@ that a published curve and a measured one sit on the same axes:
 
 | arm | what it is | where it runs |
 |---|---|---|
-| 1 — BM25 | top-5 whole documents, read by the study's reader | this host |
+| 1 — BM25 | top-5 chunks, read by the study's reader | this host |
 | 2 — File-System Agent | shell exploration of the tier tree, 80 LLM calls/question | this host |
 
 A third arm — the same BM25 retrieval read by an Aethos-tier model — runs elsewhere and
@@ -19,10 +19,12 @@ consumes a file this one writes. A fourth is Aethos itself. Neither is built her
 | setting | value | |
 |---|---|---|
 | retrieval depth | 5 | `TOP_K` |
-| retrieval unit | whole documents | `RETRIEVAL_GRANULARITY` |
+| retrieval unit | chunks (Table 8) | `RETRIEVAL_GRANULARITY` |
 | chunking | 1,200 tokens, 100 overlap | `ladder.common.CHUNK_SIZE`/`CHUNK_OVERLAP` |
 | agent budget | 80 LLM calls/question | `MAX_LLM_CALLS` |
 | reader | `Qwen/Qwen3.6-27B` via vLLM | `READER_MODEL` |
+| reader prompt | the study's, verbatim | `arms/paper_prompts.py` |
+| agent tools | `list_dir` / `grep` / `read_doc` (Table 9) | `arms/fs_tools.py` |
 | decoding | temperature 0, top-p 1.0, thinking off | `src/llm/vllm_llm.py` |
 
 The settings *are* the reproduction. A knob that can drift between tiers would make the
@@ -74,45 +76,63 @@ under the budget it names.
 `api.openai.com` with no `base_url`, and vLLM serves Chat Completions. `src/llm/vllm_llm.py`
 is a third provider, selected by `LLM_PROVIDER=vllm`.
 
-## What a hit is: documents, not chunks
+## The prompts and tools are the study's, not this repository's
 
-`RETRIEVAL_GRANULARITY` is `document`, and it is a *recorded* setting — it appears in an
-arm's `run.json` and the gate refuses a cell that carries the other value. It is document
-on faithfulness grounds:
+`arms/paper_prompts.py` transcribes Appendix C.1 and C.2 verbatim, and nothing in it may
+be tuned. This matters more than it sounds, because the repository ships its own and they
+are **not** the study's:
 
-* The benchmark's own BM25 baseline indexes and retrieves whole documents. A chunked
-  BM25 is this harness's construction, not the study's.
-* The chunk spec is what the *dense* paradigms need: an embedding is taken over a window
-  and not over a document of arbitrary length. BM25 is lexical and needs no window.
+**The reader.** The study sends a *system* message — "You are a retrieval-based QA
+assistant… Answer in the same language as the QUESTION; be concise" — and a bare user
+template, `CONTEXT:\n{context}\nQUESTION: {question}\nANSWER:`. The shipped
+`ANSWER_GEN_PROMPT` is one user turn that additionally says most documents are likely
+irrelevant, to "only provide information directly relevant to the query", and to emit no
+additional text or formatting. Measured at T0 under the shipped prompt, **96.2% of the
+gold facts the scorer did not credit were present in the context and simply not stated**,
+and the arm scored 61.66 against a published 74.7.
 
-**It does not move the score.** Both settings were run end to end at T0, same 500
-questions, same reader, one judge:
+**The agent.** Table 9 gives the raw File-System Agent exactly three read-only tools —
+`list_dir` (≤200 children), `grep` (fixed string, ≤30 paths), `read_doc` (first 8,000
+characters) — with path resolution rejecting traversal outside the corpus root. The
+shipped agent instead exposes a `run` tool executing arbitrary shell with pipes, regex
+and chaining, plus a document reader and an explicit `select_doc_by_dsid`, under a system
+prompt that coaches search strategy at length. That agent is strictly more capable, so an
+arm built on it measures a paradigm the study never ran. `arms/fs_agent.py` builds the
+study's, reusing the shared conversation loop unchanged — same call budget, same
+wall-clock backstop, same accounting of which ceiling bound.
+
+Because the study's agent has no "select these documents" tool, its document ids are the
+documents it **read**, mapped back through the tier's own index so a path outside the rung
+resolves to nothing.
+
+### One transcription uncertainty
+
+The appendix renders the reader's user template across four lines, and a PDF cannot
+distinguish a paragraph break from a line wrap — so whether a blank line separates
+`{context}` from `QUESTION:` is not recoverable. The literal reading is taken. A
+disclosed divergence for the methodology note.
+
+## What a hit is: chunks
+
+Table 8 settles it: "Retriever depth — top-5 **chunks** where applicable", and Appendix C
+adds "BM25, DenseRAG, and HippoRAG 2 use the same shared chunks."
+
+This was read the other way for one measurement, on the argument that the benchmark's own
+BM25 baseline retrieves whole documents so a chunked BM25 must be our construction. The
+paper says otherwise, and the paper is what is being reproduced.
+
+The two are within half a point of each other at T0, which is exactly why granularity is
+*recorded* in a cell's `run.json` and checked by the gate rather than inferred — nothing
+in a results file distinguishes them, so a ladder built from a mixture would look
+entirely consistent:
 
 | | combined | correctness | completeness | doc recall |
 |---|---:|---:|---:|---:|
-| chunk-level | 62.15 | 79.4 | 66.6 | 88.0 |
+| chunk-level (the study's) | 62.15 | 79.4 | 66.6 | 88.0 |
 | document-level | 61.66 | 80.8 | 66.3 | 88.2 |
 
-Published is 74.7. Both miss it by about the same distance.
-
-That result is worth keeping because the change was made on a hypothesis it refuted.
-Chunk-level retrieval counts a gold document as retrieved when any one of its chunks
-reaches the top five, while the reader sees only that chunk — and grouping T0's questions
-by how much of the gold document the reader received gave 71.7 combined for the whole
-document, 62.3 for half to nearly all, 35.7 for under half. That gradient looked like
-evidence loss. It was confounded: a document that fits in one chunk is a short document
-answering a simpler question. Under document-level retrieval every question now sees
-whole gold documents, and the same questions score **60.82** rather than 71.7.
-Completeness did not move at all, and gold coverage was never the constraint either
-(88.1% against 88.2%).
-
-So the gap is not in retrieval. Document recall is 88%, every question is handed five
-whole documents, and the reader still states only two thirds of the gold facts.
-
-The chunk path is kept because the first T0 cell was measured with it, and a number is
-only interpretable next to the unit that produced it. The two live in separate indices,
-`erb-docs-<tier>` and `erb-chunks-<tier>`, so a runner cannot read one while reporting
-the other.
+Both were measured under the *shipped* reader prompt, so both are superseded by the
+prompt correction above.
 
 ## Two things the arms do not see
 

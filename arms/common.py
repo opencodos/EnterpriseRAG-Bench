@@ -33,36 +33,23 @@ from ladder.common import (
 TOP_K = 5
 MAX_LLM_CALLS = 80
 
-# What the top-5 counts. The study publishes "top-5 retrieval depth" beside
-# "1,200-token chunks with 100-token overlap", and the two readings of that pair are
-# not equivalent: five chunks, or five documents represented as chunks.
+# What the top-5 counts. Settled by the study's Table 8 -- "Retriever depth: top-5
+# **chunks** where applicable" -- and by its Appendix C: "BM25, DenseRAG, and HippoRAG 2
+# use the same shared chunks." Chunk-level is the specification.
 #
-# Document-level is the setting, on faithfulness grounds alone. The benchmark's own
-# BM25 baseline (``src.scripts.answer_generation.index_document_bm25`` and its runner)
-# indexes and retrieves whole documents, so a chunked BM25 is our construction rather
-# than the study's; and the chunk spec is what the *dense* paradigms need, since an
-# embedding is taken over a window and not over a document of arbitrary length. BM25
-# is lexical and needs no such window.
+# This was read the other way for one measurement, on the argument that the benchmark's
+# own BM25 baseline retrieves whole documents so a chunked BM25 must be our
+# construction. The paper says otherwise, and the paper is what is being reproduced.
 #
-# **It does not change the score, and that is a measured result rather than an
-# expectation.** Both settings were run end to end at T0 against the same 500
-# questions, the same reader and one judge:
+# Measured at T0, the two are within half a point of each other, which is the reason
+# the setting is *recorded* in a cell's run.json rather than inferred: nothing in a
+# results file distinguishes them, so a ladder built from a mixture would look
+# entirely consistent.
 #
 #     chunk-level     combined 62.15   correctness 79.4   completeness 66.6
 #     document-level  combined 61.66   correctness 80.8   completeness 66.3
 #
-# The change was made because an earlier analysis found that questions where the
-# reader saw the whole gold document scored 71.7 while those seeing under half scored
-# 35.7, and read that gradient as fragmentation. It was confounded: a document that
-# fits in one chunk is a short document answering a simpler question. Under
-# document-level retrieval every question now sees whole gold documents and the
-# combined score is 60.82 over the same questions -- so the gradient measured question
-# difficulty, not evidence loss. Completeness did not move at all.
-#
-# Recorded as a setting anyway, because a cell's number is only interpretable beside
-# the unit that produced it, and because the two being indistinguishable in the output
-# is exactly why it has to be written down.
-RETRIEVAL_GRANULARITY = "document"
+RETRIEVAL_GRANULARITY = "chunk"
 GRANULARITIES = ("document", "chunk")
 
 # The reader stack the study serves. The embedding model is part of that stack and is

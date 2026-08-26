@@ -41,14 +41,7 @@ from arms.run import (
     report_run,
     write_row,
 )
-from src.llm.factory import get_llm
-from src.scripts.answer_generation.agent_retrieval import (
-    build_system_prompt,
-    build_tools,
-    check_available_commands,
-    run_agent_for_question,
-)
-from src.tools.tool_implementations.document_read import DocumentReadTool
+from arms.fs_agent import preflight_tools, run_fs_agent_for_question
 
 # Loose enough that 80 calls can complete against a locally-served reader. It is a
 # backstop against a wedged question, not the arm's budget -- see the module docstring.
@@ -109,26 +102,6 @@ def main() -> None:
     uuid_index = tier.uuid_index()
     questions = load_core_questions(limit=args.limit)
 
-    missing = check_available_commands()
-    if missing:
-        print(
-            f"[warn] {len(missing)} shell command(s) not on this box: "
-            f"{', '.join(sorted(missing))}. The agent is told only about the rest, so "
-            f"a tier measured here is not comparable to one measured where they exist."
-        )
-
-    # The prompt states the search space, and the agent's search space is sources/ --
-    # the tier's manifest lines, not its document count, which also counts the two
-    # organizational pages that sit outside the tree the agent walks.
-    system_prompt = build_system_prompt(corpus_size=len(tier.dsids))
-    tools = build_tools(
-        DocumentReadTool(
-            base_dir=str(tier.sources),
-            generated_doc_contents=True,
-            include_dsid=True,
-        )
-    )
-
     # Before anything is read back: resume keys off the question id alone, so an
     # output directory has to be pinned to the settings that wrote it or a second run
     # under different ones would report the first run's answers as its own.
@@ -150,6 +123,7 @@ def main() -> None:
 
     if not args.skip_preflight:
         preflight_reader(args.model, tools=True)
+        preflight_tools(tier.sources, uuid_index)
 
     pending = [q for q in questions if q["question_id"] not in done]
     print(
@@ -177,23 +151,16 @@ def main() -> None:
     def process(question: dict[str, Any]) -> None:
         started = time.perf_counter()
         try:
-            result = run_agent_for_question(
+            result = run_fs_agent_for_question(
                 question_id=question["question_id"],
                 question=question["question"],
-                llm=get_llm(
-                    tools=tools,
-                    quiet=quiet,
-                    reasoning_level=args.reasoning_level,
-                    model=args.model,
-                ),
-                system_prompt=system_prompt,
+                sources=tier.sources,
                 uuid_index=uuid_index,
-                quiet=quiet,
-                model=args.model,
-                reasoning_level=args.reasoning_level,
-                corpus_root=str(tier.sources),
                 max_llm_calls=args.max_llm_calls,
                 timeout_seconds=args.question_timeout,
+                model=args.model,
+                reasoning_level=args.reasoning_level,
+                quiet=quiet,
             )
             failure = None
         except Exception as exc:  # noqa: BLE001 -- the row records it either way
