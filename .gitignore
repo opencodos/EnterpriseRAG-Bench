@@ -15,3 +15,9 @@ generation_cache/
 tmp_workspace/
 # materialized corpus subsets; regenerate with subset/materialize.py
 corpus_5k/
+
+# ladder build caches; regenerate with `python -m ladder.census` and `ladder.mine`
+ladder/corpus_stats.jsonl
+ladder/embedding_cache.jsonl
+ladder/tiers_draft/
+.venv/
