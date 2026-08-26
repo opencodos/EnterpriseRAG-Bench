@@ -50,9 +50,9 @@ from arms.run import (
     report_run,
     write_row,
 )
+from arms.paper_prompts import reader_messages
 from src.llm.factory import get_llm
 from src.llm.interface import Message
-from src.prompts.vector_search_answer_gen import ANSWER_GEN_PROMPT
 
 
 def retrieve(client: OpenSearch, index_name: str, query: str, top_k: int) -> list[Chunk]:
@@ -78,13 +78,22 @@ def retrieve(client: OpenSearch, index_name: str, query: str, top_k: int) -> lis
 
 
 def answer(question: str, context: str, quiet: bool) -> str:
-    """One reader call over a rendered context block."""
-    prompt = ANSWER_GEN_PROMPT.format(context_documents=context, question=question)
+    """One reader call under the study's own reader prompt.
+
+    Two messages, a system and a user, exactly as Appendix C.1 specifies -- and
+    deliberately *not* the repository's ``ANSWER_GEN_PROMPT``, which is a single user
+    turn telling the reader that most documents are irrelevant, to provide only
+    information directly relevant to the query, and to emit no additional text at all.
+    Measured under that prompt at T0, 96.2% of the gold facts the scorer did not credit
+    were present in the context the reader was given and simply not stated.
+    """
     llm = get_llm(tools=None, quiet=quiet)
+    messages = [
+        Message(role=role, content=content)
+        for role, content in reader_messages(context, question)
+    ]
     return "".join(
-        chunk
-        for chunk in llm.generate([Message(role="user", content=prompt)])
-        if isinstance(chunk, str)
+        chunk for chunk in llm.generate(messages) if isinstance(chunk, str)
     ).strip()
 
 
