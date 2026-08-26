@@ -1,0 +1,48 @@
+{
+  "tier": "T8",
+  "draft": false,
+  "salt": "erb-ladder-v1",
+  "manifest_sha256": "4d570602780576cd29857b190b42c9dcfcc8ad5aa8a3c5972fbafe1b8cad9e9c",
+  "tokenizer": "cl100k_base",
+  "chunking": {
+    "size": 1200,
+    "overlap": 100
+  },
+  "organizational_pages": 2,
+  "documents": 6980,
+  "manifest_lines": 6978,
+  "bedrock_documents": 1142,
+  "background_documents": 5836,
+  "corpus_tokens": 8744278,
+  "chunks": 10524,
+  "mean_doc_tokens": 1252.8,
+  "by_source": {
+    "slack": 3428,
+    "gmail": 1482,
+    "linear": 538,
+    "google_drive": 399,
+    "confluence": 321,
+    "jira": 248,
+    "hubspot": 233,
+    "github": 179,
+    "fireflies": 150
+  },
+  "noise_documents": 50,
+  "background_by_source": {
+    "slack": 3261,
+    "gmail": 1386,
+    "linear": 402,
+    "google_drive": 285,
+    "hubspot": 171,
+    "fireflies": 116,
+    "github": 91,
+    "jira": 67,
+    "confluence": 57
+  },
+  "published": {
+    "documents": 6980,
+    "corpus_tokens": 8500000,
+    "chunks": 10419,
+    "mean_doc_tokens": 1217.1
+  }
+}

@@ -1,0 +1,2 @@
+generated_data/company_overview.md
+generated_data/initiatives.md

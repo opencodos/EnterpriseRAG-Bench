@@ -1,0 +1,163 @@
+{
+  "tokenizer": "cl100k_base",
+  "text": "title + '\\n\\n' + content, as the BM25 indexer joins them",
+  "chunking": {
+    "size": 1200,
+    "overlap": 100
+  },
+  "inputs": {
+    "uuid_index_documents": 511958,
+    "uuid_index_sha256": "854cda12a43334a9b7c9ebbb4a069a089d52fd7033bc71d79bdbf54f708137fb",
+    "questions": 500
+  },
+  "full_corpus": {
+    "measured": {
+      "documents": 511962,
+      "corpus_tokens": 618077879,
+      "chunks": 748050,
+      "mean_doc_tokens": 1207.3
+    },
+    "published": {
+      "documents": 511959,
+      "corpus_tokens": 600800000,
+      "chunks": 737878,
+      "mean_doc_tokens": 1173.6
+    },
+    "delta_pct": {
+      "documents": 0.0,
+      "corpus_tokens": 2.88,
+      "chunks": 1.38,
+      "mean_doc_tokens": 2.87
+    },
+    "documents_absent_from_uuid_index": 0
+  },
+  "tier_shape_targets": {
+    "T0": {
+      "documents": 1144,
+      "published_mean_doc_tokens": 1472.7,
+      "ratio_to_full_corpus": 1.2549,
+      "expected_mean_doc_tokens": 1515.0
+    },
+    "T3": {
+      "documents": 2254,
+      "published_mean_doc_tokens": 1324.0,
+      "ratio_to_full_corpus": 1.1282,
+      "expected_mean_doc_tokens": 1362.0
+    },
+    "T8": {
+      "documents": 6980,
+      "published_mean_doc_tokens": 1217.1,
+      "ratio_to_full_corpus": 1.0371,
+      "expected_mean_doc_tokens": 1252.0
+    },
+    "T13": {
+      "documents": 21614,
+      "published_mean_doc_tokens": 1186.6,
+      "ratio_to_full_corpus": 1.0111,
+      "expected_mean_doc_tokens": 1220.7
+    }
+  },
+  "by_source": {
+    "slack": 285605,
+    "gmail": 121390,
+    "linear": 35308,
+    "google_drive": 25108,
+    "hubspot": 15017,
+    "fireflies": 10173,
+    "github": 8052,
+    "jira": 6120,
+    "confluence": 5189
+  },
+  "noise": {
+    "documents": 199,
+    "share_pct": 0.0389,
+    "by_source": {
+      "confluence": 68,
+      "jira": 45,
+      "google_drive": 36,
+      "slack": 28,
+      "github": 14,
+      "fireflies": 4,
+      "linear": 2,
+      "gmail": 1,
+      "hubspot": 1
+    }
+  },
+  "gold": {
+    "documents": 722,
+    "resolved_in_corpus": 722,
+    "mean_doc_tokens": 1521.4,
+    "by_source": {
+      "confluence": 214,
+      "jira": 118,
+      "slack": 79,
+      "github": 65,
+      "google_drive": 63,
+      "linear": 60,
+      "gmail": 58,
+      "hubspot": 34,
+      "fireflies": 31
+    },
+    "noise_documents": 42
+  },
+  "questions": {
+    "total": 500,
+    "by_type": {
+      "basic": 175,
+      "semantic": 125,
+      "intra_document_reasoning": 40,
+      "project_related": 40,
+      "constrained": 30,
+      "conflicting_info": 20,
+      "completeness": 20,
+      "miscellaneous": 20,
+      "info_not_found": 20,
+      "high_level": 10
+    },
+    "not_found": 20,
+    "without_expected_docs": 30
+  },
+  "bedrock_target": {
+    "gold": 722,
+    "traps": 326,
+    "lures": 99,
+    "organizational_pages": 2,
+    "cross_category_duplicates": 5,
+    "documents": 1144,
+    "non_gold_slots": 422,
+    "implied_mean_trap_lure_tokens": 1504.1
+  },
+  "tokenizer_calibration": {
+    "sample": 4000,
+    "seed": 7,
+    "adopted": "cl100k_base / title+content",
+    "published_full_corpus_mean": 1173.6,
+    "variants": {
+      "cl100k_base / title+content": {
+        "ratio_to_adopted": 1.0,
+        "sample_mean_doc_tokens": 1216.4
+      },
+      "cl100k_base / content only": {
+        "ratio_to_adopted": 0.9934,
+        "sample_mean_doc_tokens": 1208.3
+      },
+      "o200k_base / title+content": {
+        "ratio_to_adopted": 0.9911,
+        "sample_mean_doc_tokens": 1205.6
+      },
+      "o200k_base / content only": {
+        "ratio_to_adopted": 0.9846,
+        "sample_mean_doc_tokens": 1197.7
+      },
+      "Qwen/Qwen3-Embedding-0.6B / title+content": {
+        "ratio_to_adopted": 1.0465,
+        "sample_mean_doc_tokens": 1273.0
+      },
+      "Qwen/Qwen3-Embedding-0.6B / content only": {
+        "ratio_to_adopted": 1.0397,
+        "sample_mean_doc_tokens": 1264.8
+      }
+    },
+    "conclusion": "no candidate reproduces the published mean; the study's tokenizer is not recoverable from Table 7, so tier validation compares shape (per-tier mean divided by full-corpus mean) rather than absolute token counts"
+  }
+}
