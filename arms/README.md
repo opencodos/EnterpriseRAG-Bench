@@ -77,39 +77,42 @@ is a third provider, selected by `LLM_PROVIDER=vllm`.
 ## What a hit is: documents, not chunks
 
 `RETRIEVAL_GRANULARITY` is `document`, and it is a *recorded* setting — it appears in an
-arm's `run.json` and the gate refuses a cell that carries the other value. Two reasons it
-is document:
+arm's `run.json` and the gate refuses a cell that carries the other value. It is document
+on faithfulness grounds:
 
 * The benchmark's own BM25 baseline indexes and retrieves whole documents. A chunked
   BM25 is this harness's construction, not the study's.
 * The chunk spec is what the *dense* paradigms need: an embedding is taken over a window
   and not over a document of arbitrary length. BM25 is lexical and needs no window.
 
-**The two are not close.** Under chunk-level retrieval a gold document counts as
-retrieved when any one of its chunks reaches the top five, while the reader sees only
-that chunk — so the answer carries whichever gold fact happened to fall in that window
-and misses the ones in the others. It scores *correct* on the headline fact and
-*incomplete* on the rest, which is exactly the shape the first T0 measurement had:
-document recall 88%, correctness 80%, completeness 66%.
+**It does not move the score.** Both settings were run end to end at T0, same 500
+questions, same reader, one judge:
 
-Measured at T0, grouping questions by how much of the gold document the reader actually
-received:
+| | combined | correctness | completeness | doc recall |
+|---|---:|---:|---:|---:|
+| chunk-level | 62.15 | 79.4 | 66.6 | 88.0 |
+| document-level | 61.66 | 80.8 | 66.3 | 88.2 |
 
-| gold document the reader saw | n | correct | combined |
-|---|---:|---:|---:|
-| 100% (whole document) | 263 | 91.6% | **71.7** |
-| 50–99% | 139 | 82.7% | 62.3 |
-| <50% | 31 | 48.4% | 35.7 |
+Published is 74.7. Both miss it by about the same distance.
 
-The published value is 74.7. The reproduction was being lost *inside* the retrieved
-documents, not in which documents were retrieved — gold coverage barely moves between the
-two settings (88.1% chunk-level against 89.3% document-level), and the whole-document
-group lands inside the gate's acceptance band on its own.
+That result is worth keeping because the change was made on a hypothesis it refuted.
+Chunk-level retrieval counts a gold document as retrieved when any one of its chunks
+reaches the top five, while the reader sees only that chunk — and grouping T0's questions
+by how much of the gold document the reader received gave 71.7 combined for the whole
+document, 62.3 for half to nearly all, 35.7 for under half. That gradient looked like
+evidence loss. It was confounded: a document that fits in one chunk is a short document
+answering a simpler question. Under document-level retrieval every question now sees
+whole gold documents, and the same questions score **60.82** rather than 71.7.
+Completeness did not move at all, and gold coverage was never the constraint either
+(88.1% against 88.2%).
 
-The chunk path is kept rather than deleted, because the first T0 cell was measured with
-it and a number is only interpretable next to the unit that produced it. The two live in
-separate indices, `erb-docs-<tier>` and `erb-chunks-<tier>`, so a runner cannot read one
-while reporting the other.
+So the gap is not in retrieval. Document recall is 88%, every question is handed five
+whole documents, and the reader still states only two thirds of the gold facts.
+
+The chunk path is kept because the first T0 cell was measured with it, and a number is
+only interpretable next to the unit that produced it. The two live in separate indices,
+`erb-docs-<tier>` and `erb-chunks-<tier>`, so a runner cannot read one while reporting
+the other.
 
 ## Two things the arms do not see
 

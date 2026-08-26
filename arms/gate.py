@@ -78,11 +78,11 @@ CONFIDENCE = 0.95
 # override exists for smoke tests -- and a smoke-test setting that reached a gate run
 # would produce a score rather than an error.
 #
-# ``granularity`` is here for the same reason the others are, and it is the one that
-# cost a measurement to learn: a chunk-level cell and a document-level cell are both
-# well-formed, both report five retrieved units, and differ by twelve points of
-# combined score, because chunk-level hands the reader one window of a gold document
-# and calls the document retrieved.
+# ``granularity`` is here because a chunk-level cell and a document-level cell are
+# both well-formed and both report five retrieved units, so nothing in a results file
+# tells them apart. Measured at T0 they score within half a point of each other, which
+# is precisely why it has to be recorded rather than inferred: the setting is invisible
+# in the output and a mixed ladder would look consistent.
 REQUIRED_SETTINGS = {
     "bm25": {"top_k": 5, "granularity": RETRIEVAL_GRANULARITY},
     "agent": {"max_llm_calls": 80},

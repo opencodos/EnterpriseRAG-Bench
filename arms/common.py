@@ -37,21 +37,31 @@ MAX_LLM_CALLS = 80
 # "1,200-token chunks with 100-token overlap", and the two readings of that pair are
 # not equivalent: five chunks, or five documents represented as chunks.
 #
-# Document-level is the setting, for two reasons. The benchmark's own BM25 baseline
-# (``src.scripts.answer_generation.index_document_bm25`` and its runner) indexes and
-# retrieves whole documents, so a chunked BM25 is our construction rather than the
-# study's; and the chunk spec is what the *dense* paradigms need, since an embedding
-# is taken over a window and not over a document of arbitrary length. BM25 is lexical
-# and needs no such window.
+# Document-level is the setting, on faithfulness grounds alone. The benchmark's own
+# BM25 baseline (``src.scripts.answer_generation.index_document_bm25`` and its runner)
+# indexes and retrieves whole documents, so a chunked BM25 is our construction rather
+# than the study's; and the chunk spec is what the *dense* paradigms need, since an
+# embedding is taken over a window and not over a document of arbitrary length. BM25
+# is lexical and needs no such window.
 #
-# Measured at T0, the difference is not cosmetic. Under chunk-level retrieval a gold
-# document counts as retrieved when any one of its chunks reaches the top five, while
-# the reader sees only that chunk -- so the answer carries the fact that happened to
-# be in it and misses the ones in the others. Grouped by how much of the gold document
-# the reader actually received: whole document, 71.7 combined; half to nearly all,
-# 62.3; less than half, 35.7. The published value is 74.7. The reproduction was being
-# lost inside the retrieved documents, not in which documents were retrieved -- gold
-# coverage barely moves between the two settings (88.1% against 89.3%).
+# **It does not change the score, and that is a measured result rather than an
+# expectation.** Both settings were run end to end at T0 against the same 500
+# questions, the same reader and one judge:
+#
+#     chunk-level     combined 62.15   correctness 79.4   completeness 66.6
+#     document-level  combined 61.66   correctness 80.8   completeness 66.3
+#
+# The change was made because an earlier analysis found that questions where the
+# reader saw the whole gold document scored 71.7 while those seeing under half scored
+# 35.7, and read that gradient as fragmentation. It was confounded: a document that
+# fits in one chunk is a short document answering a simpler question. Under
+# document-level retrieval every question now sees whole gold documents and the
+# combined score is 60.82 over the same questions -- so the gradient measured question
+# difficulty, not evidence loss. Completeness did not move at all.
+#
+# Recorded as a setting anyway, because a cell's number is only interpretable beside
+# the unit that produced it, and because the two being indistinguishable in the output
+# is exactly why it has to be written down.
 RETRIEVAL_GRANULARITY = "document"
 GRANULARITIES = ("document", "chunk")
 
