@@ -137,6 +137,76 @@ Both default to one question at a time. Above that, the recorded per-question la
 a queueing time rather than the arm's. Whatever value a tier used, every other tier has
 to use, and the run's summary records it.
 
+The two arms also run *sequentially* rather than side by side. They share one reader, so
+a concurrent pair would queue on each other and record the same inflated latency that
+parallelism inside an arm produces.
+
+## Scoring and the gate
+
+Answers are the durable artifact and scores are derived from them, so a rubric or judge
+change costs a re-scoring and no re-asking.
+
+```bash
+arms/score.sh results/T0 gpt-5.5-2026-04-23 8      # both cells, one judge, --no-correction
+python -m arms.gate --tier-tree /data/tier-T0 \
+    --arm bm25=results/T0/bm25 --arm agent=results/T0/agent \
+    --judge gpt-5.5-2026-04-23 --session <id>
+```
+
+Scoring needs no corpus and no GPU — with `--no-correction` there is no document path to
+resolve — so it runs wherever the API key lives rather than on the box that measured the
+arms.
+
+`--no-correction` is not a preference. The consensus correction flow rewrites gold
+answers, facts and expected document ids when a system's documents differ from the gold
+set, which lets a system help choose what it is graded on; four arms held to four gold
+sets are not compared at all. The gate verifies it was honoured rather than trusting the
+flag, by refusing a results file in which any question was corrected.
+
+**The judge is not recorded by the official scorer.** Nothing in a results file
+distinguishes two cells graded by different judges from two systems that differ, and the
+study measured judge choice alone moving combined scores by −3.56 to +1.18. So
+`arms/score.sh` scores every cell of a rung from one line, and `arms.gate` refuses to run
+without being told which judge it was and which session — which it records in its output
+rather than deriving, because it cannot.
+
+### The rule
+
+`arms/gate.py` holds it as a constant, and it was written into the plan before this
+harness existed: **both paper-faithful arms must land within 3.5 points of their
+published value** — BM25 in 71.2–78.2 and the File-System Agent in 73.9–80.9 at T0. The
+band is the study's own cross-judge spread, not a number chosen for comfort. A threshold
+picked after seeing the score is the first thing a skeptical reader attacks, so the later
+rungs reuse this one unchanged.
+
+Bootstrap intervals over questions are reported beside the point estimates and do **not**
+widen the rule. A wide interval is a reason to trust the point estimate less, not a
+licence to accept one further from the published value.
+
+A miss stops the ladder and is logged as a deviation rather than worked around — including
+a miss in the direction that flatters us, since our bedrock scoring *higher* than theirs
+most likely means the adversarial layer is thin.
+
+### What the gate checks besides the score
+
+Every one of these produces a plausible number rather than an error, which is why a gate
+that compared two floats would pass all of them:
+
+| check | the fault it catches |
+|---|---|
+| tier identity | the arm was measured against a different manifest than the one being gated |
+| `top_k` / `max_llm_calls` | a smoke-test override reached a real run — the arms warn but still run |
+| suite size | 500 scored, 0 skipped; a short suite scores as a smaller sample, not a worse system |
+| no-correction honoured | no question was corrected, so all arms face one gold set |
+| metric agrees with scorer | the gate's own arithmetic against the scorer's, so it cannot be reading the wrong field |
+| binding ceiling (agent) | questions cut off by the wall clock rather than the call budget, capped at 1% |
+| questions answered | sentinel answers score zero, but many of them are a broken harness reported as a weak system |
+
+`arms/published.py` transcribes Tables 11 and 12 once — all seven paradigms at the four
+rungs — so the gate's two anchors and the final report's overlay cannot drift apart. The
+five paradigms not reproduced carry `None` above the rung where their construction
+stopped: a point to omit from a chart, never a zero to plot.
+
 ## The host
 
 `arms/host/create-instance.sh` builds it; `arms/host/startup.sh` is its boot script,
