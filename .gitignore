@@ -21,3 +21,6 @@ ladder/corpus_stats.jsonl
 ladder/embedding_cache.jsonl
 ladder/tiers_draft/
 .venv/
+
+# arm results; regenerate by re-running the arms
+arms/results/

@@ -650,7 +650,7 @@ def make_run_tool_executor(
     _cmd_index = [0]
     _seen: dict[str, int] = {}  # command → first cmd index
     _zero_counts: dict[str, int] = {}  # normalised base path → consecutive zeros
-    _subdirs_hint = _build_subdirs_hint(os.path.abspath(SOURCES_DIR))
+    _subdirs_hint = _build_subdirs_hint(os.path.abspath(cwd or SOURCES_DIR))
     _semaphore_wait_total = [0.0]
     _wait_lock = threading.Lock()
 
@@ -758,19 +758,33 @@ def run_agent_for_question(
     quiet: bool,
     model: str | None = None,
     reasoning_level: ReasoningLevel = "medium",
+    corpus_root: str | None = None,
+    max_llm_calls: int | None = None,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Run the agentic loop for a single question.
 
-    Returns a dict with keys: question_id, answer, document_ids
+    Args:
+        corpus_root: Directory the agent explores. Defaults to ``SOURCES_DIR``,
+            the full corpus. A ladder arm passes one tier's materialized tree,
+            so the search space is the tier and not everything on the box.
+        max_llm_calls: Ceiling on the LLM calls this question may spend, or None
+            for wall-clock bounding alone.
+        timeout_seconds: Wall-clock ceiling for this question. Defaults to
+            ``QUESTION_TIMEOUT_SECONDS``. An arm whose budget is a call count
+            has to raise this, or the clock cuts the agent off first and the
+            call budget it reports was never the thing that bound it.
+
+    Returns a dict with keys: question_id, answer, document_ids, llm_calls,
+    budget_exhausted, timed_out
     """
     selected_ids: set[str] = set()
+    root = os.path.abspath(corpus_root or SOURCES_DIR)
 
-    run_executor, get_semaphore_wait = make_run_tool_executor(
-        cwd=os.path.abspath(SOURCES_DIR),
-    )
+    run_executor, get_semaphore_wait = make_run_tool_executor(cwd=root)
     select_doc_executor = make_select_doc_executor(uuid_index, selected_ids)
     read_tool = DocumentReadTool(
-        base_dir=os.path.abspath(SOURCES_DIR),
+        base_dir=root,
         generated_doc_contents=True,
         include_dsid=True,
     )
@@ -800,11 +814,14 @@ def run_agent_for_question(
     # conversation with a cheap LLM instead of bluntly dropping old pairs.
     compaction_fn = make_context_compaction_fn(quiet=quiet, cheap_model=model)
 
-    run_agent_conversation(
+    result = run_agent_conversation(
         llm=llm,
         executors=executors,
         messages=messages,
-        timeout_seconds=QUESTION_TIMEOUT_SECONDS,
+        timeout_seconds=(
+            QUESTION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        ),
+        max_llm_calls=max_llm_calls,
         shutdown_warning_seconds=30,
         shutdown_message=OUT_OF_TIME_USER_MESSAGE,
         force_finish_llm=force_finish_llm,
@@ -833,6 +850,9 @@ def run_agent_for_question(
         "question_id": question_id,
         "answer": answer,
         "document_ids": document_ids,
+        "llm_calls": result.llm_calls,
+        "budget_exhausted": result.budget_exhausted,
+        "timed_out": result.timed_out,
     }
 
 

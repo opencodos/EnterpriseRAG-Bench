@@ -450,7 +450,14 @@ def run_auto_conversation(
 class AgentConversationResult:
     """Result of a time-based agent conversation."""
 
-    __slots__ = ("terminated_by_tool", "timed_out", "tool_cycles", "llm_retries")
+    __slots__ = (
+        "terminated_by_tool",
+        "timed_out",
+        "tool_cycles",
+        "llm_retries",
+        "llm_calls",
+        "budget_exhausted",
+    )
 
     def __init__(
         self,
@@ -458,11 +465,21 @@ class AgentConversationResult:
         timed_out: bool = False,
         tool_cycles: int = 0,
         llm_retries: int = 0,
+        llm_calls: int = 0,
+        budget_exhausted: bool = False,
     ) -> None:
         self.terminated_by_tool = terminated_by_tool
         self.timed_out = timed_out
         self.tool_cycles = tool_cycles
         self.llm_retries = llm_retries
+        # Successful LLM calls this question spent, retries excluded. Reported so a
+        # run can say how much of the ceiling the agent actually used.
+        self.llm_calls = llm_calls
+        # True when the loop stopped because the call budget ran out. Exclusive with
+        # ``timed_out``: the two name which ceiling ended the question, and a caller
+        # reporting one as the other would attribute a load-dependent cut-off to a
+        # budget it was never charged against.
+        self.budget_exhausted = budget_exhausted
 
 
 def run_agent_conversation(
@@ -470,6 +487,7 @@ def run_agent_conversation(
     executors: dict[str, ToolExecutor],
     messages: list[Message],
     timeout_seconds: float = 300,
+    max_llm_calls: int | None = None,
     shutdown_warning_seconds: float = 30,
     shutdown_message: str | None = None,
     no_tool_calls_message: str | None = None,
@@ -501,6 +519,14 @@ def run_agent_conversation(
         executors: Mapping of tool name → callable(**args) → str.
         messages: The conversation messages (modified in place).
         timeout_seconds: Wall-clock budget for the conversation.
+        max_llm_calls: Ceiling on the LLM calls one question may spend, or None
+            for no ceiling. Must be at least 1. The last call of the budget is
+            reserved for the forced finish, so a question that exhausts the budget
+            still answers rather than returning empty; the loop itself may
+            therefore make ``max_llm_calls - 1`` calls, and a budget of 1 is the
+            forced finish alone. Retries after a transport error and
+            context-compaction calls are not charged, since neither is a step the
+            agent chose to take.
         shutdown_warning_seconds: Seconds before deadline to inject the
             shutdown warning message.
         shutdown_message: Message injected when time is nearly up.
@@ -532,28 +558,47 @@ def run_agent_conversation(
     Returns:
         An ``AgentConversationResult`` with metadata about how the
         conversation ended.
+
+    Raises:
+        ValueError: If *max_llm_calls* is given and is less than 1.
     """
+    if max_llm_calls is not None and max_llm_calls < 1:
+        raise ValueError(
+            f"max_llm_calls must be at least 1, got {max_llm_calls}; a budget the "
+            f"forced finish alone cannot fit is not a budget"
+        )
+
     start_time = time.monotonic()
     deadline = start_time + timeout_seconds
 
     step = 0
     tool_cycles = 0
     llm_retries = 0
+    llm_calls = 0
     shutdown_injected = False
     compaction_count = 0
+    # One call is held back for the forced finish so an agent that spends the whole
+    # budget still produces an answer instead of an empty string the scorer would
+    # grade as a wrong answer. A budget of exactly one is therefore all forced finish
+    # and no loop -- not one call each, which would spend two against a ceiling of one.
+    loop_budget = max_llm_calls - 1 if max_llm_calls is not None else None
+    budget_exhausted = loop_budget == 0
 
     def _credit() -> float:
         return deadline_credit_fn() if deadline_credit_fn is not None else 0.0
 
     with traced_span("agent_conversation", span_type="task") as conversation_span:
-        while time.monotonic() < deadline + _credit():
-            # Graceful shutdown warning
+        while not budget_exhausted and time.monotonic() < deadline + _credit():
+            # Graceful shutdown warning, on whichever budget runs out first
             credit = _credit()
+            out_of_time = (time.monotonic() - start_time - credit) >= (
+                timeout_seconds - shutdown_warning_seconds
+            )
+            out_of_calls = loop_budget is not None and llm_calls >= loop_budget - 1
             if (
                 not shutdown_injected
                 and shutdown_message
-                and (time.monotonic() - start_time - credit)
-                >= timeout_seconds - shutdown_warning_seconds
+                and (out_of_time or out_of_calls)
             ):
                 shutdown_injected = True
                 messages.append(Message(role="user", content=shutdown_message))
@@ -597,6 +642,12 @@ def run_agent_conversation(
                 time.sleep(5)
                 continue
 
+            # Charged only for a call that returned: a retry is not a step the
+            # agent took, and neither is a compaction.
+            llm_calls += 1
+            if loop_budget is not None and llm_calls >= loop_budget:
+                budget_exhausted = True
+
             if not quiet and full_response:
                 print()
 
@@ -633,6 +684,8 @@ def run_agent_conversation(
                         terminated_by_tool=True,
                         tool_cycles=tool_cycles,
                         llm_retries=llm_retries,
+                        llm_calls=llm_calls,
+                        budget_exhausted=budget_exhausted,
                     )
                 continue
 
@@ -656,14 +709,21 @@ def run_agent_conversation(
             return AgentConversationResult(
                 tool_cycles=tool_cycles,
                 llm_retries=llm_retries,
+                llm_calls=llm_calls,
+                budget_exhausted=budget_exhausted,
             )
 
         # --- Post-deadline: forced finish -----------------------------------
         elapsed = time.monotonic() - start_time
         if not quiet:
+            limit = (
+                f"call budget ({max_llm_calls} calls)"
+                if budget_exhausted
+                else f"time limit ({timeout_seconds}s)"
+            )
             print(
-                f"\n[warn] time limit ({timeout_seconds}s) reached "
-                f"after {step} step(s) (elapsed: {elapsed:.1f}s)"
+                f"\n[warn] {limit} reached after {step} step(s) "
+                f"({llm_calls} LLM call(s), elapsed: {elapsed:.1f}s)"
             )
 
         if force_finish_llm is not None:
@@ -697,9 +757,11 @@ def run_agent_conversation(
                             )
                             return AgentConversationResult(
                                 terminated_by_tool=True,
-                                timed_out=True,
+                                timed_out=not budget_exhausted,
                                 tool_cycles=tool_cycles + 1,
                                 llm_retries=llm_retries,
+                                llm_calls=llm_calls + 1,
+                                budget_exhausted=budget_exhausted,
                             )
                     elif full_response:
                         messages.append(
@@ -736,7 +798,9 @@ def run_agent_conversation(
             },
         )
         return AgentConversationResult(
-            timed_out=True,
+            timed_out=not budget_exhausted,
             tool_cycles=tool_cycles,
             llm_retries=llm_retries,
+            llm_calls=llm_calls + (1 if force_finish_llm is not None else 0),
+            budget_exhausted=budget_exhausted,
         )
