@@ -52,6 +52,7 @@ from arms.run import (
 )
 from arms.paper_prompts import reader_messages
 from src.llm.factory import get_llm
+from src.llm.vllm_llm import ENABLE_THINKING
 from src.llm.interface import Message
 
 
@@ -157,6 +158,7 @@ def main() -> None:
             "granularity": args.granularity,
             "top_k": args.top_k,
             "parallelism": args.parallelism,
+            "reader_thinking": ENABLE_THINKING,
         },
     )
     answers_path = args.out_dir / "answers.jsonl"
