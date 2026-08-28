@@ -33,6 +33,25 @@ from ladder.common import (
 TOP_K = 5
 MAX_LLM_CALLS = 80
 
+# What the top-5 counts. Settled by the study's Table 8 -- "Retriever depth: top-5
+# **chunks** where applicable" -- and by its Appendix C: "BM25, DenseRAG, and HippoRAG 2
+# use the same shared chunks." Chunk-level is the specification.
+#
+# This was read the other way for one measurement, on the argument that the benchmark's
+# own BM25 baseline retrieves whole documents so a chunked BM25 must be our
+# construction. The paper says otherwise, and the paper is what is being reproduced.
+#
+# Measured at T0, the two are within half a point of each other, which is the reason
+# the setting is *recorded* in a cell's run.json rather than inferred: nothing in a
+# results file distinguishes them, so a ladder built from a mixture would look
+# entirely consistent.
+#
+#     chunk-level     combined 62.15   correctness 79.4   completeness 66.6
+#     document-level  combined 61.66   correctness 80.8   completeness 66.3
+#
+RETRIEVAL_GRANULARITY = "chunk"
+GRANULARITIES = ("document", "chunk")
+
 # The reader stack the study serves. The embedding model is part of that stack and is
 # stood up beside the reader, but neither reproduced arm queries it: BM25 is lexical
 # and the File-System Agent greps. It is here so the host that serves the reader is
@@ -72,7 +91,12 @@ def chunk_text(
 
 @dataclass(frozen=True)
 class Chunk:
-    """One retrievable unit: a window of one document's indexed text."""
+    """One retrievable unit: a window of one document's indexed text.
+
+    A whole document is the degenerate case, ``index=0`` of ``total=1`` -- which is
+    already what a document shorter than the window produces, so document-level
+    retrieval is not a second kind of thing here but the same one at its limit.
+    """
 
     dsid: str
     index: int
@@ -84,6 +108,28 @@ class Chunk:
     def point_id(self) -> str:
         """The id this chunk is stored under, deterministic in (document, position)."""
         return f"{self.dsid}:{self.index}"
+
+    @property
+    def is_whole_document(self) -> bool:
+        return self.total == 1
+
+
+def whole_document(doc: dict[str, Any]) -> Chunk:
+    """One corpus document as a single retrievable unit, unwindowed.
+
+    The text is exactly what ``document_chunks`` would have windowed, so the two
+    granularities differ in where the text is cut and not in what it is.
+
+    Raises KeyError when the document carries no field labels, which is how a file
+    under ``sources/`` that is not a corpus document announces itself.
+    """
+    return Chunk(
+        dsid=doc["dataset_doc_uuid"],
+        index=0,
+        total=1,
+        title=str(doc[doc["title_field_name"]]),
+        text=document_text(doc),
+    )
 
 
 def document_chunks(doc: dict[str, Any]) -> list[Chunk]:
@@ -283,3 +329,66 @@ def load_tier(root: Path) -> Tier:
         manifest_sha256=digest,
         provenance=provenance,
     )
+
+
+# ---------------------------------------------------------------------------
+# The bedrock's two organizational pages
+# ---------------------------------------------------------------------------
+
+# The study counts them inside the tier -- "Together with the benchmark's two
+# organizational overview pages, which we include as scaffolds, the full evaluation
+# tier holds 511,959 documents" (S3.1) -- and 10 of the 500 questions are
+# "scaffold-supported high-level" ones whose only evidence they are (Figure 2). A
+# retriever that cannot return them cannot answer those questions at all, so indexing
+# them is what the paper specifies, not an embellishment of it.
+#
+# They are not corpus documents: both sit outside ``sources/``, carry no
+# ``dataset_doc_uuid`` and appear in no ``uuid_index.json``, which is why the manifest
+# -- frozen as document ids and nothing else -- names neither, and why a tier's
+# document count is its manifest's line count plus two. The ids below exist so that a
+# retrieved scaffold has something to be reported as; they are this harness's, they are
+# stable, and they are deliberately outside the ``dsid_<hex>`` shape a corpus id takes
+# so that no join to the corpus can silently match one.
+SCAFFOLD_PAGES: dict[str, str] = {
+    "scaffold_company_overview": "company_overview.md",
+    "scaffold_initiatives": "initiatives.md",
+}
+
+
+def scaffold_chunks(tier: "Tier", granularity: str = RETRIEVAL_GRANULARITY) -> list[Chunk]:
+    """The two organizational pages as retrievable units, chunked as documents are.
+
+    Rendered as ``title\\n\\ncontent`` and windowed by the same chunker, so a scaffold
+    competes with a corpus document on the same terms rather than on a longer or
+    shorter unit. The title is the page's first markdown heading where it has one and
+    the file's stem otherwise.
+
+    A page the tier tree does not carry is an error rather than a skip: the tier would
+    then hold 1,143 documents under a name that promises 1,144, and the ten high-level
+    questions would score zero for a reason no results file records.
+    """
+    chunks: list[Chunk] = []
+    for dsid, filename in SCAFFOLD_PAGES.items():
+        path = tier.root / filename
+        if not path.is_file():
+            raise TierError(
+                f"{path} is missing; the tier's two organizational pages are part of "
+                f"its {tier.documents} documents and the high-level questions have no "
+                f"other evidence"
+            )
+        body = path.read_text(encoding="utf-8").strip()
+        heading = next(
+            (
+                line.lstrip("#").strip()
+                for line in body.splitlines()
+                if line.startswith("#") and line.lstrip("#").strip()
+            ),
+            path.stem,
+        )
+        text = f"{heading}\n\n{body}"
+        pieces = chunk_text(text) if granularity == "chunk" else [text]
+        chunks.extend(
+            Chunk(dsid=dsid, index=position, total=len(pieces), title=heading, text=piece)
+            for position, piece in enumerate(pieces)
+        )
+    return chunks

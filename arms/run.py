@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from arms.common import Tier
+from arms.common import SCAFFOLD_PAGES, Tier
 from ladder.common import QUESTIONS_PATH, load_questions
 
 # The same sentinel the Aethos-side runner writes, and for the same reason: the
@@ -179,7 +179,10 @@ def report_run(
     missing = sorted(expected - answered)
     failed = [row for row in rows if row.get("answer") == FAILED_ANSWER_TEXT]
 
-    tier_dsids = set(tier.dsids)
+    # The two organizational pages are inside the tier the study describes but outside
+    # the manifest, which is frozen as corpus document ids; a retrieved scaffold is
+    # therefore in the rung even though no manifest line names it.
+    tier_dsids = set(tier.dsids) | set(SCAFFOLD_PAGES)
     foreign = sorted(
         {
             dsid

@@ -18,17 +18,21 @@ consumes a file this one writes. A fourth is Aethos itself. Neither is built her
 
 | setting | value | |
 |---|---|---|
-| retrieval depth | 5 chunks | `TOP_K` |
+| retrieval depth | 5 | `TOP_K` |
+| retrieval unit | chunks (Table 8) | `RETRIEVAL_GRANULARITY` |
 | chunking | 1,200 tokens, 100 overlap | `ladder.common.CHUNK_SIZE`/`CHUNK_OVERLAP` |
 | agent budget | 80 LLM calls/question | `MAX_LLM_CALLS` |
 | reader | `Qwen/Qwen3.6-27B` via vLLM | `READER_MODEL` |
+| reader prompt | the study's, verbatim | `arms/paper_prompts.py` |
+| agent tools | `list_dir` / `grep` / `read_doc` (Table 9) | `arms/fs_tools.py` |
 | decoding | temperature 0, top-p 1.0, thinking off | `src/llm/vllm_llm.py` |
 
 The settings *are* the reproduction. A knob that can drift between tiers would make the
 rungs incomparable to each other, and nothing in the resulting curve would show it — so
 the ladder's four rungs are measured by one configuration or the comparison is void.
-Passing `--top-k` or `--max-llm-calls` anything else prints a warning saying the run is
-not comparable to the published curve; it is there for smoke tests, not for tuning.
+Passing `--top-k`, `--granularity` or `--max-llm-calls` anything else prints a warning
+saying the run is not comparable to the published curve; it is there for smoke tests, not
+for tuning.
 
 Chunk size and the document text come from `ladder.common`, imported rather than
 restated. A tier's published token and chunk counts were validated against the study's
@@ -40,13 +44,17 @@ differently-joined document would be searching a corpus the ladder never measure
 The phrase "configure the runners" undersells it. Three of the study's shared settings
 had no knob to turn:
 
-**BM25 was document-level.** `src/scripts/answer_generation/index_document_bm25.py`
-indexes whole documents into one `text` field and its runner retrieves whole documents;
-there is no chunker anywhere near it. The study retrieves top-5 *chunks*. Rather than
-change that pair, `arms/index_bm25.py` and `arms/bm25.py` are a second, chunked index and
-runner alongside them — because `ladder.pool` mines its trap and lure candidates from the
-document-level index's top-200, so re-pointing it at chunks would change a bedrock phase
-5 has already committed.
+**BM25 needed a per-tier index.** `src/scripts/answer_generation/index_document_bm25.py`
+indexes the whole corpus, and `ladder.pool` mines its trap and lure candidates from that
+index's top-200 — so re-pointing it at a tier would change a bedrock phase 5 has already
+committed. `arms/index_bm25.py` and `arms/bm25.py` are a second, per-tier index and
+runner alongside it, at the same analyzer and the same query, differing only in what is
+indexed.
+
+**And in what a hit is — which cost a full measurement to get right.** The study
+publishes "top-5 retrieval depth" beside "1,200-token chunks with 100-token overlap",
+and those admit two readings: five chunks, or five documents. This harness first read it
+as five chunks. That is wrong, and the error is not cosmetic — see below.
 
 **The agent was wall-clock bounded.** `run_agent_conversation` took `timeout_seconds` and
 no call ceiling, so `max_llm_calls` is new. The last call of the budget is reserved for
@@ -67,6 +75,64 @@ under the budget it names.
 **The reader was unreachable.** `get_llm()` spoke the OpenAI Responses API against
 `api.openai.com` with no `base_url`, and vLLM serves Chat Completions. `src/llm/vllm_llm.py`
 is a third provider, selected by `LLM_PROVIDER=vllm`.
+
+## The prompts and tools are the study's, not this repository's
+
+`arms/paper_prompts.py` transcribes Appendix C.1 and C.2 verbatim, and nothing in it may
+be tuned. This matters more than it sounds, because the repository ships its own and they
+are **not** the study's:
+
+**The reader.** The study sends a *system* message — "You are a retrieval-based QA
+assistant… Answer in the same language as the QUESTION; be concise" — and a bare user
+template, `CONTEXT:\n{context}\nQUESTION: {question}\nANSWER:`. The shipped
+`ANSWER_GEN_PROMPT` is one user turn that additionally says most documents are likely
+irrelevant, to "only provide information directly relevant to the query", and to emit no
+additional text or formatting. Measured at T0 under the shipped prompt, **96.2% of the
+gold facts the scorer did not credit were present in the context and simply not stated**,
+and the arm scored 61.66 against a published 74.7.
+
+**The agent.** Table 9 gives the raw File-System Agent exactly three read-only tools —
+`list_dir` (≤200 children), `grep` (fixed string, ≤30 paths), `read_doc` (first 8,000
+characters) — with path resolution rejecting traversal outside the corpus root. The
+shipped agent instead exposes a `run` tool executing arbitrary shell with pipes, regex
+and chaining, plus a document reader and an explicit `select_doc_by_dsid`, under a system
+prompt that coaches search strategy at length. That agent is strictly more capable, so an
+arm built on it measures a paradigm the study never ran. `arms/fs_agent.py` builds the
+study's, reusing the shared conversation loop unchanged — same call budget, same
+wall-clock backstop, same accounting of which ceiling bound.
+
+Because the study's agent has no "select these documents" tool, its document ids are the
+documents it **read**, mapped back through the tier's own index so a path outside the rung
+resolves to nothing.
+
+### One transcription uncertainty
+
+The appendix renders the reader's user template across four lines, and a PDF cannot
+distinguish a paragraph break from a line wrap — so whether a blank line separates
+`{context}` from `QUESTION:` is not recoverable. The literal reading is taken. A
+disclosed divergence for the methodology note.
+
+## What a hit is: chunks
+
+Table 8 settles it: "Retriever depth — top-5 **chunks** where applicable", and Appendix C
+adds "BM25, DenseRAG, and HippoRAG 2 use the same shared chunks."
+
+This was read the other way for one measurement, on the argument that the benchmark's own
+BM25 baseline retrieves whole documents so a chunked BM25 must be our construction. The
+paper says otherwise, and the paper is what is being reproduced.
+
+The two are within half a point of each other at T0, which is exactly why granularity is
+*recorded* in a cell's `run.json` and checked by the gate rather than inferred — nothing
+in a results file distinguishes them, so a ladder built from a mixture would look
+entirely consistent:
+
+| | combined | correctness | completeness | doc recall |
+|---|---:|---:|---:|---:|
+| chunk-level (the study's) | 62.15 | 79.4 | 66.6 | 88.0 |
+| document-level | 61.66 | 80.8 | 66.3 | 88.2 |
+
+Both were measured under the *shipped* reader prompt, so both are superseded by the
+prompt correction above.
 
 ## Two things the arms do not see
 
@@ -98,7 +164,7 @@ python -m ladder.materialize --tier T0 --out /data/tier-T0
 
 # On the baseline host:
 export LLM_PROVIDER=vllm VLLM_BASE_URL=http://localhost:8000/v1
-python -m arms.index_bm25 --tier-tree /data/tier-T0 --recreate
+python -m arms.index_bm25 --tier-tree /data/tier-T0 --recreate   # whole documents
 python -m arms.bm25   --tier-tree /data/tier-T0 --out-dir results/T0/bm25
 python -m arms.agent  --tier-tree /data/tier-T0 --out-dir results/T0/agent
 ```
@@ -136,6 +202,76 @@ these do not.
 Both default to one question at a time. Above that, the recorded per-question latency is
 a queueing time rather than the arm's. Whatever value a tier used, every other tier has
 to use, and the run's summary records it.
+
+The two arms also run *sequentially* rather than side by side. They share one reader, so
+a concurrent pair would queue on each other and record the same inflated latency that
+parallelism inside an arm produces.
+
+## Scoring and the gate
+
+Answers are the durable artifact and scores are derived from them, so a rubric or judge
+change costs a re-scoring and no re-asking.
+
+```bash
+arms/score.sh results/T0 gpt-5.5-2026-04-23 8      # both cells, one judge, --no-correction
+python -m arms.gate --tier-tree /data/tier-T0 \
+    --arm bm25=results/T0/bm25 --arm agent=results/T0/agent \
+    --judge gpt-5.5-2026-04-23 --session <id>
+```
+
+Scoring needs no corpus and no GPU — with `--no-correction` there is no document path to
+resolve — so it runs wherever the API key lives rather than on the box that measured the
+arms.
+
+`--no-correction` is not a preference. The consensus correction flow rewrites gold
+answers, facts and expected document ids when a system's documents differ from the gold
+set, which lets a system help choose what it is graded on; four arms held to four gold
+sets are not compared at all. The gate verifies it was honoured rather than trusting the
+flag, by refusing a results file in which any question was corrected.
+
+**The judge is not recorded by the official scorer.** Nothing in a results file
+distinguishes two cells graded by different judges from two systems that differ, and the
+study measured judge choice alone moving combined scores by −3.56 to +1.18. So
+`arms/score.sh` scores every cell of a rung from one line, and `arms.gate` refuses to run
+without being told which judge it was and which session — which it records in its output
+rather than deriving, because it cannot.
+
+### The rule
+
+`arms/gate.py` holds it as a constant, and it was written into the plan before this
+harness existed: **both paper-faithful arms must land within 3.5 points of their
+published value** — BM25 in 71.2–78.2 and the File-System Agent in 73.9–80.9 at T0. The
+band is the study's own cross-judge spread, not a number chosen for comfort. A threshold
+picked after seeing the score is the first thing a skeptical reader attacks, so the later
+rungs reuse this one unchanged.
+
+Bootstrap intervals over questions are reported beside the point estimates and do **not**
+widen the rule. A wide interval is a reason to trust the point estimate less, not a
+licence to accept one further from the published value.
+
+A miss stops the ladder and is logged as a deviation rather than worked around — including
+a miss in the direction that flatters us, since our bedrock scoring *higher* than theirs
+most likely means the adversarial layer is thin.
+
+### What the gate checks besides the score
+
+Every one of these produces a plausible number rather than an error, which is why a gate
+that compared two floats would pass all of them:
+
+| check | the fault it catches |
+|---|---|
+| tier identity | the arm was measured against a different manifest than the one being gated |
+| `top_k` / `max_llm_calls` | a smoke-test override reached a real run — the arms warn but still run |
+| suite size | 500 scored, 0 skipped; a short suite scores as a smaller sample, not a worse system |
+| no-correction honoured | no question was corrected, so all arms face one gold set |
+| metric agrees with scorer | the gate's own arithmetic against the scorer's, so it cannot be reading the wrong field |
+| binding ceiling (agent) | questions cut off by the wall clock rather than the call budget, capped at 1% |
+| questions answered | sentinel answers score zero, but many of them are a broken harness reported as a weak system |
+
+`arms/published.py` transcribes Tables 11 and 12 once — all seven paradigms at the four
+rungs — so the gate's two anchors and the final report's overlay cannot drift apart. The
+five paradigms not reproduced carry `None` above the rung where their construction
+stopped: a point to omit from a chart, never a zero to plot.
 
 ## The host
 

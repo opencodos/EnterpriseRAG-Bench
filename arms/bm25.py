@@ -1,6 +1,6 @@
 """Arm 1: the study's BM25 paradigm over one tier, read by the study's reader.
 
-Retrieves the top-5 chunks for each question, renders them into a context block, and
+Retrieves the top-5 documents for each question, renders them into a context block, and
 asks the reader for an answer under the repository's own answer-generation prompt.
 Writes two files, because this arm produces the control arm's input as well as its own
 result:
@@ -32,6 +32,8 @@ from tqdm import tqdm
 
 from arms.common import (
     Chunk,
+    GRANULARITIES,
+    RETRIEVAL_GRANULARITY,
     TOP_K,
     Tier,
     documents_of,
@@ -48,9 +50,10 @@ from arms.run import (
     report_run,
     write_row,
 )
+from arms.paper_prompts import reader_messages
 from src.llm.factory import get_llm
+from src.llm.vllm_llm import ENABLE_THINKING
 from src.llm.interface import Message
-from src.prompts.vector_search_answer_gen import ANSWER_GEN_PROMPT
 
 
 def retrieve(client: OpenSearch, index_name: str, query: str, top_k: int) -> list[Chunk]:
@@ -76,13 +79,22 @@ def retrieve(client: OpenSearch, index_name: str, query: str, top_k: int) -> lis
 
 
 def answer(question: str, context: str, quiet: bool) -> str:
-    """One reader call over a rendered context block."""
-    prompt = ANSWER_GEN_PROMPT.format(context_documents=context, question=question)
+    """One reader call under the study's own reader prompt.
+
+    Two messages, a system and a user, exactly as Appendix C.1 specifies -- and
+    deliberately *not* the repository's ``ANSWER_GEN_PROMPT``, which is a single user
+    turn telling the reader that most documents are irrelevant, to provide only
+    information directly relevant to the query, and to emit no additional text at all.
+    Measured under that prompt at T0, 96.2% of the gold facts the scorer did not credit
+    were present in the context the reader was given and simply not stated.
+    """
     llm = get_llm(tools=None, quiet=quiet)
+    messages = [
+        Message(role=role, content=content)
+        for role, content in reader_messages(context, question)
+    ]
     return "".join(
-        chunk
-        for chunk in llm.generate([Message(role="user", content=prompt)])
-        if isinstance(chunk, str)
+        chunk for chunk in llm.generate(messages) if isinstance(chunk, str)
     ).strip()
 
 
@@ -92,6 +104,15 @@ def main() -> None:
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--opensearch-url", default=DEFAULT_OPENSEARCH_URL)
     parser.add_argument("--index-name", default=None)
+    parser.add_argument(
+        "--granularity",
+        default=RETRIEVAL_GRANULARITY,
+        choices=GRANULARITIES,
+        help=(
+            f"What the top-k counts: whole documents or windowed chunks "
+            f"(default: {RETRIEVAL_GRANULARITY}, the study's)"
+        ),
+    )
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument(
         "--parallelism",
@@ -112,8 +133,16 @@ def main() -> None:
             f"is not comparable to the published curve"
         )
 
+    if args.granularity != RETRIEVAL_GRANULARITY:
+        print(
+            f"[warn] granularity {args.granularity!r} is not the study's "
+            f"{RETRIEVAL_GRANULARITY!r}; this run is not comparable to the published "
+            f"curve. Under chunk-level retrieval the reader sees only the matching "
+            f"window of a retrieved document, not the document."
+        )
+
     tier: Tier = load_tier(args.tier_tree)
-    index_name = args.index_name or index_name_for(tier)
+    index_name = args.index_name or index_name_for(tier, args.granularity)
     questions = load_core_questions(limit=args.limit)
 
     # Before anything is read back: resume keys off the question id alone, so an
@@ -126,8 +155,10 @@ def main() -> None:
             "tier": tier.name,
             "manifest_sha256": tier.manifest_sha256,
             "index": index_name,
+            "granularity": args.granularity,
             "top_k": args.top_k,
             "parallelism": args.parallelism,
+            "reader_thinking": ENABLE_THINKING,
         },
     )
     answers_path = args.out_dir / "answers.jsonl"
@@ -145,7 +176,11 @@ def main() -> None:
         f"{tier.name} / bm25: {len(questions)} question(s), {len(done)} already answered, "
         f"{len(pending)} pending -> {args.out_dir}"
     )
-    settings = {"index": index_name, "top_k": args.top_k}
+    settings = {
+        "index": index_name,
+        "granularity": args.granularity,
+        "top_k": args.top_k,
+    }
     if not pending:
         report_run(
             answers_path,

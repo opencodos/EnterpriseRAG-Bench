@@ -24,3 +24,8 @@ ladder/tiers_draft/
 
 # arm results; regenerate by re-running the arms
 arms/results/
+
+# Measured cells. A cell is answers, scores and provenance, and the snapshot bucket is
+# its store -- the path there encodes tier and arm, so a bucket listing is the tracking.
+# Committing them here would put a second, diverging copy under a different identity.
+results/

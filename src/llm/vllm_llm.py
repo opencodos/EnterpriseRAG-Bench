@@ -44,7 +44,33 @@ VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "EMPTY")
 # The study's decoding settings. Deliberately not configurable — see the module docstring.
 TEMPERATURE = 0.0
 TOP_P = 1.0
-ENABLE_THINKING = False
+
+# Appendix C states the reader is "served with temperature zero and thinking disabled",
+# so False is the specification and the default. The override exists because the study's
+# *published* bedrock numbers do not match that setting and do match its opposite:
+# measured on 80 questions at T0 under one retrieval, prompt and judge, thinking-off
+# scores 71.50 completeness against the study's published 80.4, and thinking-on scores
+# 80.80. A chat template that silently ignores `enable_thinking` emits reasoning text as
+# plain answer content, which the official scorer grades as part of the answer -- the
+# failure this module's preflight probe exists to catch, and the most likely explanation
+# of the discrepancy.
+#
+# So this is not a knob to tune: it is how the two readings of the study's own reader
+# configuration are measured against each other. A run that sets it is not the paper's
+# stated configuration and must say so, which is why it is loud, named for what it is,
+# and recorded in the cell's run.json rather than left to an operator's memory.
+ENABLE_THINKING = os.environ.get("READER_ENABLE_THINKING", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+if ENABLE_THINKING:
+    print(
+        "[warn] READER_ENABLE_THINKING is set: the reader is answering WITH reasoning "
+        "text, which is not the configuration Appendix C states. This run reproduces "
+        "the study's published numbers, not its stated setting.",
+        flush=True,
+    )
 
 _THINK_BLOCK = re.compile(r"<think>", re.IGNORECASE)
 
@@ -255,6 +281,15 @@ def probe_thinking_disabled(model: str | None = None) -> None:
     Raises:
         VLLMChatError: if the endpoint is unreachable or still emits a think block.
     """
+    if ENABLE_THINKING:
+        # The run has deliberately asked for reasoning text; the probe would fail by
+        # design. It stays silent rather than passing, so nothing reads this run as
+        # having been checked for the property it is knowingly not holding.
+        print(
+            "[warn] skipping the thinking-disabled probe: this run asked for thinking",
+            flush=True,
+        )
+        return
     llm = VLLMLLM(model=model, quiet=True)
     prompt = "Think carefully, then reply with exactly the word: ready"
     try:
