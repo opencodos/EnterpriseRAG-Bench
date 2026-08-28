@@ -241,10 +241,13 @@ def preflight_reader(model: str | None = None, *, tools: bool = False) -> None:
         print(f"[warn] LLM_PROVIDER is '{LLM_PROVIDER}', not the study's vLLM-served reader")
         return
 
-    from src.llm.vllm_llm import probe_thinking_disabled, probe_tool_calls
+    from src.llm.vllm_llm import ENABLE_THINKING, probe_thinking_disabled, probe_tool_calls
 
     probe_thinking_disabled(model)
-    checks = "reachable, thinking disabled"
+    # Named for what was actually established. The probe skips itself when the run
+    # asked for reasoning text, so claiming "thinking disabled" here would print the
+    # study's stated configuration over a run that is deliberately not it.
+    checks = "reachable, " + ("thinking ENABLED" if ENABLE_THINKING else "thinking disabled")
     if tools:
         probe_tool_calls(model)
         checks += ", tool calls served"

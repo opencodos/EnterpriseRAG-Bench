@@ -30,6 +30,27 @@ PARALLELISM="${3:-4}"
 # stops moving, so this is a ceiling and not a cost.
 MAX_PASSES="${MAX_PASSES:-5}"
 
+# Which interpreter runs the scorer. This script is meant to run on a machine that is
+# *not* the one that measured the arms -- with --no-correction there is no corpus to
+# resolve, so it runs wherever the judge's API key lives -- and "python" is not a
+# command that exists everywhere. It resolves inside an activated venv on the baseline
+# host and not at all on a stock macOS, where the failure is a bare
+# "python: command not found" out of a heredoc rather than anything about scoring. So
+# the repo's own venv is preferred, then python3, then python.
+if [ -z "${PYTHON:-}" ]; then
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+    PYTHON="$REPO_ROOT/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="$(command -v python3)"
+  else
+    PYTHON="$(command -v python)" || {
+      echo "no python found; set PYTHON=<interpreter>" >&2
+      exit 1
+    }
+  fi
+fi
+
 export LLM_PROVIDER=openai
 export LLM_MODEL_NAME="$JUDGE"
 
@@ -62,7 +83,7 @@ for cell in "${cells[@]}"; do
   # Re-scoring only the rows that could raise our score is the kind of asymmetry a
   # skeptical reader is right to attack. Genuine zeros simply come back zero.
   for pass in $(seq 1 "$MAX_PASSES"); do
-    before=$(python - "$cell/results.json" <<'PY'
+    before=$("$PYTHON" - "$cell/results.json" <<'PY'
 import json, sys
 try:
     rows = json.load(open(sys.argv[1]))["questions"]
@@ -76,7 +97,7 @@ PY
       [ "$before" = "0" ] && { echo "  pass $pass: no zero-completeness rows left"; break; }
       [ "$before" = "$prev_zero" ] && { echo "  pass $pass: $before zero row(s), unchanged -- converged"; break; }
       # Drop the zeroed rows so --resume re-scores exactly those.
-      python - "$cell/results.json" <<'PY'
+      "$PYTHON" - "$cell/results.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 r = json.load(open(p))
@@ -91,7 +112,7 @@ PY
     # also swallow the scorer's own exit status, so a crashed pass would look like a
     # converged one.
     log="$(mktemp)"
-    if ! python -m src.scripts.answer_evaluation.metrics_based_eval \
+    if ! "$PYTHON" -m src.scripts.answer_evaluation.metrics_based_eval \
       --answers-file "$cell/answers.jsonl" \
       --results-file "$cell/results.json" \
       --parallelism "$PARALLELISM" \

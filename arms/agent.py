@@ -42,6 +42,7 @@ from arms.run import (
     write_row,
 )
 from arms.fs_agent import preflight_tools, run_fs_agent_for_question
+from src.llm.vllm_llm import ENABLE_THINKING
 
 # Loose enough that 80 calls can complete against a locally-served reader. It is a
 # backstop against a wedged question, not the arm's budget -- see the module docstring.
@@ -121,6 +122,13 @@ def main() -> None:
             "model": args.model,
             "reasoning_level": args.reasoning_level,
             "parallelism": args.parallelism,
+            # Recorded for the same reason the BM25 arm records it: the setting is
+            # an environment variable, so a cell that does not carry it is one whose
+            # reader cannot be identified afterwards. The gate reads this field per
+            # arm rather than requiring one reader across both, because the two
+            # reproduce under different settings -- but it refuses a cell that cannot
+            # say which one produced it.
+            "reader_thinking": ENABLE_THINKING,
         },
     )
     answers_path = args.out_dir / "answers.jsonl"

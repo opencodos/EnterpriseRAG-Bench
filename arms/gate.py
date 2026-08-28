@@ -7,6 +7,15 @@ rung. If they land, the ladder construction, the reader configuration, the score
 the whole harness are validated at a fraction of the programme's cost. If they miss,
 the ladder stops here rather than climbing on an anchor that does not hold.
 
+**The two arms are served by different readers, by decision.** Each is served the
+configuration under which it reproduces its own published value -- the agent by
+Appendix C's stated thinking-disabled reader, BM25 by the thinking-enabled one, the
+only setting under which its published value is reachable. So each arm against its own
+published value is like-for-like, and the *gap between the arms* is not: it carries a
+reader change worth twelve points to BM25 on top of the paradigm change. See
+:func:`reader_configuration`, which records the setting per arm and refuses a cell
+that does not name its own.
+
 **The acceptance rule is declared in this module and not derived from any result.**
 Both arms must land within ``TOLERANCE_POINTS`` of their published value. A threshold
 chosen after seeing the number is the first thing a skeptical reader attacks, so it is
@@ -367,6 +376,105 @@ def evaluate_arm(arm: str, cell: Path, tier: Tier) -> ArmVerdict:
 
 
 # ---------------------------------------------------------------------------
+# The reader, across arms
+# ---------------------------------------------------------------------------
+
+
+def reader_configuration(
+    cells: dict[str, Path], asserted: dict[str, bool] | None = None
+) -> tuple[dict[str, bool], dict[str, bool], Check]:
+    """The reader each arm was served by, recorded per arm rather than forced to be one.
+
+    **The study serves one reader to every paradigm. This reproduction does not.** Each
+    arm is served by the configuration under which it reproduces its own published
+    value: the File-System Agent by Appendix C's stated thinking-disabled reader, and
+    BM25 by the thinking-enabled one, which is the only setting under which its
+    published value is reachable at all -- thinking-off puts it at 64.47 against a
+    published 74.7, ten points outside the acceptance band, while thinking-on puts it
+    at 77.05.
+
+    That is a deliberate operator decision and it is recorded here rather than smoothed
+    over, because it is the single fact most likely to be missed by someone reading a
+    passing gate. Two consequences a reader of this file has to be handed:
+
+    * The two arms' scores are not measured under one system, so the *difference*
+      between them carries a reader-configuration change as well as a paradigm change.
+      The study's own crossover between these two paradigms is 0.2 points at T8; the
+      configuration difference is worth 12 points to BM25. Nothing here licenses
+      reading the gap between arm 1 and arm 2 as a property of the paradigms.
+    * Each arm against *its own* published value is still a like-for-like comparison,
+      and that is what this gate checks.
+
+    What is still refused is a cell that can neither say which reader produced it nor
+    be told. The setting is an environment variable, so an unrecorded run is one whose
+    reader nobody can identify from the artifact, and the default reading -- that an
+    absent field means the default setting -- is exactly the assumption that would hide
+    a mixture.
+
+    *asserted* is the operator supplying that setting for a cell measured before the
+    arms recorded it, via ``--assert-reader``. It is deliberately not written into the
+    cell: the artifact stays as it was measured, and the assertion lands in the gate's
+    own output marked as an assertion, so the audit trail distinguishes "the run
+    recorded this" from "a human said so afterwards". An assertion that contradicts a
+    cell that *does* record the setting is refused rather than allowed to win.
+    """
+    asserted = asserted or {}
+    settings: dict[str, bool] = {}
+    from_assertion: dict[str, bool] = {}
+    unresolved: list[str] = []
+    contradicted: list[str] = []
+
+    for arm in sorted(cells):
+        identity = _load(cells[arm] / "run.json", "the cell cannot identify its reader")
+        recorded = identity.get("reader_thinking")
+        claim = asserted.get(arm)
+        if isinstance(recorded, bool):
+            if claim is not None and claim != recorded:
+                contradicted.append(
+                    f"{arm} records reader_thinking={recorded} but was asserted {claim}"
+                )
+            settings[arm] = recorded
+            from_assertion[arm] = False
+        elif claim is not None:
+            settings[arm] = claim
+            from_assertion[arm] = True
+        else:
+            unresolved.append(arm)
+
+    if contradicted:
+        return {}, {}, Check(
+            "reader known per arm",
+            False,
+            "; ".join(contradicted) + " -- the cell wins over an assertion, fix the flag",
+        )
+    if unresolved:
+        return {}, {}, Check(
+            "reader known per arm",
+            False,
+            f"{', '.join(unresolved)} neither records reader_thinking nor was given it "
+            f"with --assert-reader, so the reader that produced the cell is unknown",
+        )
+
+    detail = ", ".join(
+        f"{arm}={'reasoning' if settings[arm] else 'no-reasoning'}"
+        + (" (ASSERTED)" if from_assertion[arm] else "")
+        for arm in sorted(settings)
+    )
+    uniform = len(set(settings.values())) == 1
+    return settings, from_assertion, Check(
+        "reader known per arm",
+        True,
+        detail
+        + (
+            ""
+            if uniform
+            else "  -- MIXED: the arms were served by different readers, so the gap "
+            "between them is not a paradigm comparison"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -396,6 +504,17 @@ def main() -> None:
         "--session",
         required=True,
         help="An identifier for the one scoring session both cells were scored in.",
+    )
+    parser.add_argument(
+        "--assert-reader",
+        action="append",
+        default=[],
+        metavar="NAME=on|off",
+        help=(
+            "Supply the reader setting for a cell measured before the arms recorded "
+            "it, e.g. agent=off. Recorded in gate.json as an assertion, never written "
+            "into the cell; refused if it contradicts a cell that does record it."
+        ),
     )
     parser.add_argument("--out", type=Path, default=None, help="Where to write gate.json")
     args = parser.parse_args()
@@ -428,7 +547,30 @@ def main() -> None:
             f"{published - TOLERANCE_POINTS:.1f}-{published + TOLERANCE_POINTS:.1f}"
         )
 
+    asserted: dict[str, bool] = {}
+    for spec in args.assert_reader:
+        name, _, value = spec.partition("=")
+        if value.strip().lower() not in ("on", "off"):
+            raise SystemExit(f"--assert-reader expects NAME=on|off, got {spec!r}")
+        asserted[name] = value.strip().lower() == "on"
+
+    reader_by_arm, reader_asserted, reader_check = reader_configuration(cells, asserted)
     verdicts = [evaluate_arm(arm, cells[arm], tier) for arm in sorted(cells)]
+
+    print("\nThe reader each arm was served by:")
+    print(reader_check.render())
+    if any(reader_asserted.values()):
+        named = ", ".join(a for a, v in sorted(reader_asserted.items()) if v)
+        print(
+            f"    NOTE: the reader for {named} was asserted by the operator, not "
+            f"recorded by the run."
+        )
+    if len(set(reader_by_arm.values())) > 1:
+        print(
+            "    NOTE: this is a per-arm reproduction. Each arm is compared against "
+            "its own\n          published value; the difference between the arms is "
+            "not a paradigm comparison."
+        )
 
     print("\nMeasured:")
     for verdict in verdicts:
@@ -445,7 +587,7 @@ def main() -> None:
         for check in verdict.checks:
             print(check.render())
 
-    passed = all(verdict.passed for verdict in verdicts)
+    passed = all(verdict.passed for verdict in verdicts) and reader_check.passed
     payload = {
         "tier": tier.name,
         "tier_documents": tier.documents,
@@ -454,6 +596,14 @@ def main() -> None:
         "scoring_session": args.session,
         "no_correction": True,
         "tolerance_points": TOLERANCE_POINTS,
+        "reader_thinking_by_arm": reader_by_arm,
+        "reader_thinking_asserted": reader_asserted,
+        "reader_uniform": len(set(reader_by_arm.values())) == 1,
+        "reader_check": {
+            "name": reader_check.name,
+            "passed": reader_check.passed,
+            "detail": reader_check.detail,
+        },
         "arms": [verdict.as_dict() for verdict in verdicts],
         "passed": passed,
     }
