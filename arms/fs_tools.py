@@ -52,22 +52,34 @@ def _resolve(root: Path, relative: str) -> Path:
 
 
 def make_tools(
-    root: Path, read_paths: set[str]
+    root: Path,
+    read_paths: set[str],
+    scaffolds: dict[str, Path] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Callable[..., str]]]:
     """Build the schemas and executors for one question's agent.
 
     Args:
         root: The tier tree's ``sources/`` directory. The agent sees this and nothing
             above it, so the search space is the rung and not the box.
+        scaffolds: The bedrock's two organizational pages, as ``name -> path``. They
+            are inside the tier the study describes -- it counts them among its 1,144
+            documents and calls ten of the questions "scaffold-supported" -- but they
+            are not corpus documents and so sit outside ``sources/``. They are grafted
+            into the root the agent sees rather than copied into the tier tree, whose
+            checksum is committed. An agent that never lists the root will still not
+            find them, which is faithful: the study's own system prompt enumerates the
+            nine source folders and does not mention them.
         read_paths: Accumulates every path ``read_doc`` served, in call order. The
             study's agent has no explicit "select these documents" tool -- the shipped
             one does -- so what the agent *read* is the only record of what it
             retrieved, and the arm's document ids come from here.
 
     Returns:
-        (tool schemas in OpenAI format, name -> executor).
+        (tool schemas in the flat Responses-API shape ``get_llm`` takes,
+        name -> executor).
     """
     root = root.resolve()
+    pages = {name: path.resolve() for name, path in (scaffolds or {}).items()}
 
     def list_dir(path: str = ".") -> str:
         try:
@@ -77,6 +89,8 @@ def make_tools(
         if not target.is_dir():
             return f"Error: '{path}' is not a directory."
         names = sorted(entry.name for entry in target.iterdir())
+        if target == root:
+            names = sorted(names + list(pages))
         shown = names[:LIST_DIR_MAX_CHILDREN]
         out = "\n".join(shown)
         if len(names) > LIST_DIR_MAX_CHILDREN:
@@ -96,6 +110,12 @@ def make_tools(
         """
         needle = query.lower()
         hits: list[str] = []
+        for name, page in sorted(pages.items()):
+            try:
+                if needle in page.read_text(encoding="utf-8", errors="ignore").lower():
+                    hits.append(name)
+            except OSError:
+                continue
         for path in sorted(root.rglob("*.json")):
             try:
                 if needle in path.read_text(encoding="utf-8", errors="ignore").lower():
@@ -112,6 +132,16 @@ def make_tools(
         return out
 
     def read_doc(path: str) -> str:
+        page = pages.get(path.lstrip("./"))
+        if page is not None:
+            raw = page.read_text(encoding="utf-8", errors="ignore")
+            read_paths.add(path.lstrip("./"))
+            if len(raw) > READ_DOC_MAX_CHARS:
+                return (
+                    raw[:READ_DOC_MAX_CHARS]
+                    + f"\n... [truncated at {READ_DOC_MAX_CHARS} characters]"
+                )
+            return raw
         try:
             target = _resolve(root, path)
         except Traversal:
@@ -140,65 +170,64 @@ def make_tools(
             )
         return raw
 
+    # The flat Responses-API tool shape, which is what ``get_llm`` takes: the client
+    # layer (``VLLMLLM._convert_tools``) is what nests these under ``function`` for
+    # Chat Completions. Emitting the nested shape here raises ``KeyError: 'name'`` on
+    # every call, client-side, before any request is sent -- and the reader preflight
+    # does not catch it, because it probes with a tool it builds itself.
     schemas: list[dict[str, Any]] = [
         {
             "type": "function",
-            "function": {
-                "name": "list_dir",
-                "description": (
-                    f"List the children of a directory, relative to the corpus root. "
-                    f"Returns up to {LIST_DIR_MAX_CHILDREN} names."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path; '.' for the corpus root.",
-                        }
-                    },
-                    "required": ["path"],
+            "name": "list_dir",
+            "description": (
+                f"List the children of a directory, relative to the corpus root. "
+                f"Returns up to {LIST_DIR_MAX_CHILDREN} names."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path; '.' for the corpus root.",
+                    }
                 },
+                "required": ["path"],
             },
         },
         {
             "type": "function",
-            "function": {
-                "name": "grep",
-                "description": (
-                    f"Find documents containing a fixed string. Returns up to "
-                    f"{GREP_MAX_PATHS} matching paths."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Fixed string to search for (not a regex).",
-                        }
-                    },
-                    "required": ["query"],
+            "name": "grep",
+            "description": (
+                f"Find documents containing a fixed string. Returns up to "
+                f"{GREP_MAX_PATHS} matching paths."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Fixed string to search for (not a regex).",
+                    }
                 },
+                "required": ["query"],
             },
         },
         {
             "type": "function",
-            "function": {
-                "name": "read_doc",
-                "description": (
-                    f"Read a document by relative path. Returns its first "
-                    f"{READ_DOC_MAX_CHARS:,} characters."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path to the document.",
-                        }
-                    },
-                    "required": ["path"],
+            "name": "read_doc",
+            "description": (
+                f"Read a document by relative path. Returns its first "
+                f"{READ_DOC_MAX_CHARS:,} characters."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path to the document.",
+                    }
                 },
+                "required": ["path"],
             },
         },
     ]
