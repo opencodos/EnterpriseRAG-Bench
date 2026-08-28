@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from arms.common import SCAFFOLD_PAGES
 from arms.fs_tools import make_tools
 from arms.paper_prompts import AGENT_SYSTEM_PROMPT
 from src.llm.auto_conversation import run_agent_conversation
@@ -40,6 +41,7 @@ def run_fs_agent_for_question(
     question: str,
     sources: Path,
     uuid_index: dict[str, str],
+    scaffolds: dict[str, Path] | None = None,
     max_llm_calls: int,
     timeout_seconds: float,
     model: str | None = None,
@@ -57,7 +59,7 @@ def run_fs_agent_for_question(
         budget_exhausted, timed_out.
     """
     read_paths: set[str] = set()
-    schemas, executors = make_tools(sources, read_paths)
+    schemas, executors = make_tools(sources, read_paths, scaffolds)
 
     messages: list[Message] = [
         Message(role="system", content=AGENT_SYSTEM_PROMPT),
@@ -99,6 +101,9 @@ def run_fs_agent_for_question(
     # through the tier's own index, so a path outside the rung resolves to nothing
     # rather than to a document the arm never searched.
     by_path = {path: dsid for dsid, path in uuid_index.items()}
+    # The two organizational pages carry no corpus id, so they map back through
+    # SCAFFOLD_PAGES rather than through the tier's index.
+    by_path.update({filename: dsid for dsid, filename in SCAFFOLD_PAGES.items()})
     document_ids = sorted({by_path[p] for p in read_paths if p in by_path})
 
     return {
@@ -112,7 +117,11 @@ def run_fs_agent_for_question(
     }
 
 
-def preflight_tools(sources: Path, uuid_index: dict[str, str]) -> None:
+def preflight_tools(
+    sources: Path,
+    uuid_index: dict[str, str],
+    scaffolds: dict[str, Path] | None = None,
+) -> None:
     """Check the three tools work over this tier before a multi-hour run starts.
 
     Every one of these fails into a *result* rather than an error if left unmade: an
@@ -121,7 +130,7 @@ def preflight_tools(sources: Path, uuid_index: dict[str, str]) -> None:
     answers standing on no documents.
     """
     read_paths: set[str] = set()
-    _, executors = make_tools(sources, read_paths)
+    _, executors = make_tools(sources, read_paths, scaffolds)
 
     listing = executors["list_dir"](".")
     folders = [line for line in listing.splitlines() if not line.startswith("...")]
@@ -141,6 +150,7 @@ def preflight_tools(sources: Path, uuid_index: dict[str, str]) -> None:
         raise SystemExit(f"read_doc failed on {hits[0]}: {body}")
 
     by_path = {path: dsid for dsid, path in uuid_index.items()}
+    by_path.update({filename: dsid for dsid, filename in SCAFFOLD_PAGES.items()})
     unmapped = [p for p in read_paths if p not in by_path]
     if unmapped:
         raise SystemExit(

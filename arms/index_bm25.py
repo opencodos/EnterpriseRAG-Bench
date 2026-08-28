@@ -38,6 +38,7 @@ from arms.common import (
     Tier,
     document_chunks,
     load_tier,
+    scaffold_chunks,
     whole_document,
 )
 
@@ -171,6 +172,26 @@ def main() -> None:
                 }
             )
 
+    # The bedrock's two organizational pages, which the manifest cannot name because
+    # neither is a corpus document. The study counts them inside the tier and ten of
+    # its questions have no other evidence, so an index without them searches 1,142
+    # documents while reporting 1,144 -- and those ten score zero for a reason no
+    # results file records.
+    for chunk in scaffold_chunks(tier, args.granularity):
+        actions.append(
+            {
+                "_index": index_name,
+                "_id": chunk.point_id,
+                "_source": {
+                    "dataset_doc_uuid": chunk.dsid,
+                    "chunk_index": chunk.index,
+                    "chunk_total": chunk.total,
+                    "title": chunk.title,
+                    "text": chunk.text,
+                },
+            }
+        )
+
     # A document the manifest names but this release cannot read would silently
     # shrink the search space, so it stops the build the way a missing one does.
     if unreadable:
@@ -201,7 +222,7 @@ def main() -> None:
 
     print(
         f"\nDone. {tier.name}: {indexed:,} {args.granularity} unit(s) from "
-        f"{len(tier.dsids):,} documents "
+        f"{tier.documents:,} documents "
         f"in {time.time() - started:.1f}s -> {index_name}"
     )
 

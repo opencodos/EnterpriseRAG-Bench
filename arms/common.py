@@ -329,3 +329,66 @@ def load_tier(root: Path) -> Tier:
         manifest_sha256=digest,
         provenance=provenance,
     )
+
+
+# ---------------------------------------------------------------------------
+# The bedrock's two organizational pages
+# ---------------------------------------------------------------------------
+
+# The study counts them inside the tier -- "Together with the benchmark's two
+# organizational overview pages, which we include as scaffolds, the full evaluation
+# tier holds 511,959 documents" (S3.1) -- and 10 of the 500 questions are
+# "scaffold-supported high-level" ones whose only evidence they are (Figure 2). A
+# retriever that cannot return them cannot answer those questions at all, so indexing
+# them is what the paper specifies, not an embellishment of it.
+#
+# They are not corpus documents: both sit outside ``sources/``, carry no
+# ``dataset_doc_uuid`` and appear in no ``uuid_index.json``, which is why the manifest
+# -- frozen as document ids and nothing else -- names neither, and why a tier's
+# document count is its manifest's line count plus two. The ids below exist so that a
+# retrieved scaffold has something to be reported as; they are this harness's, they are
+# stable, and they are deliberately outside the ``dsid_<hex>`` shape a corpus id takes
+# so that no join to the corpus can silently match one.
+SCAFFOLD_PAGES: dict[str, str] = {
+    "scaffold_company_overview": "company_overview.md",
+    "scaffold_initiatives": "initiatives.md",
+}
+
+
+def scaffold_chunks(tier: "Tier", granularity: str = RETRIEVAL_GRANULARITY) -> list[Chunk]:
+    """The two organizational pages as retrievable units, chunked as documents are.
+
+    Rendered as ``title\\n\\ncontent`` and windowed by the same chunker, so a scaffold
+    competes with a corpus document on the same terms rather than on a longer or
+    shorter unit. The title is the page's first markdown heading where it has one and
+    the file's stem otherwise.
+
+    A page the tier tree does not carry is an error rather than a skip: the tier would
+    then hold 1,143 documents under a name that promises 1,144, and the ten high-level
+    questions would score zero for a reason no results file records.
+    """
+    chunks: list[Chunk] = []
+    for dsid, filename in SCAFFOLD_PAGES.items():
+        path = tier.root / filename
+        if not path.is_file():
+            raise TierError(
+                f"{path} is missing; the tier's two organizational pages are part of "
+                f"its {tier.documents} documents and the high-level questions have no "
+                f"other evidence"
+            )
+        body = path.read_text(encoding="utf-8").strip()
+        heading = next(
+            (
+                line.lstrip("#").strip()
+                for line in body.splitlines()
+                if line.startswith("#") and line.lstrip("#").strip()
+            ),
+            path.stem,
+        )
+        text = f"{heading}\n\n{body}"
+        pieces = chunk_text(text) if granularity == "chunk" else [text]
+        chunks.extend(
+            Chunk(dsid=dsid, index=position, total=len(pieces), title=heading, text=piece)
+            for position, piece in enumerate(pieces)
+        )
+    return chunks

@@ -30,7 +30,7 @@ from typing import Any
 
 from tqdm import tqdm
 
-from arms.common import MAX_LLM_CALLS, Tier, load_tier
+from arms.common import MAX_LLM_CALLS, SCAFFOLD_PAGES, Tier, load_tier
 from arms.run import (
     FAILED_ANSWER_TEXT,
     bind_run_identity,
@@ -100,6 +100,11 @@ def main() -> None:
     # The tier's uuid index is what the select_doc tool validates against, so an agent
     # cannot name a document outside the rung it is exploring.
     uuid_index = tier.uuid_index()
+    # Grafted into the root the agent explores: the study counts these two inside the
+    # tier and ten questions have no other evidence, but neither is a corpus document.
+    scaffolds = {
+        filename: tier.root / filename for filename in SCAFFOLD_PAGES.values()
+    }
     questions = load_core_questions(limit=args.limit)
 
     # Before anything is read back: resume keys off the question id alone, so an
@@ -123,7 +128,7 @@ def main() -> None:
 
     if not args.skip_preflight:
         preflight_reader(args.model, tools=True)
-        preflight_tools(tier.sources, uuid_index)
+        preflight_tools(tier.sources, uuid_index, scaffolds)
 
     pending = [q for q in questions if q["question_id"] not in done]
     print(
@@ -156,6 +161,7 @@ def main() -> None:
                 question=question["question"],
                 sources=tier.sources,
                 uuid_index=uuid_index,
+                scaffolds=scaffolds,
                 max_llm_calls=args.max_llm_calls,
                 timeout_seconds=args.question_timeout,
                 model=args.model,
